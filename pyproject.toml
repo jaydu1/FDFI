@@ -51,7 +51,9 @@ docs = [
     "sphinxcontrib-napoleon>=0.7",
 ]
 all = [
-    "fdfi[dev,plots,docs]",
+    "dev",
+    "plots",
+    "docs",
 ]
 
 [project.urls]

@@ -8,6 +8,11 @@ import numpy as np
 from typing import Optional, Union, Any, Tuple
 
 
+# Constants for logit link function
+_LOGIT_MIN_PROB = 1e-7
+_LOGIT_MAX_PROB = 1 - 1e-7
+
+
 def validate_input(X: Any) -> np.ndarray:
     """
     Validate and convert input to numpy array.
@@ -133,7 +138,7 @@ def convert_to_link(
         return predictions
     elif link == "logit":
         # Convert probabilities to logit scale
-        predictions = np.clip(predictions, 1e-7, 1 - 1e-7)
+        predictions = np.clip(predictions, _LOGIT_MIN_PROB, _LOGIT_MAX_PROB)
         return np.log(predictions / (1 - predictions))
     else:
         raise ValueError(f"Unknown link function: {link}")

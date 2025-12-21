@@ -119,7 +119,8 @@ class TestCheckAdditivity:
         """Test with perfect additivity."""
         base_value = 0.5
         shap_values = np.array([[0.1, 0.2, 0.3], [0.2, 0.3, 0.4]])
-        predictions = np.array([0.5 + 0.6, 0.5 + 0.9])  # base + sum(shap)
+        # Predictions should equal base_value + sum(shap_values)
+        predictions = np.array([base_value + 0.6, base_value + 0.9])
         
         satisfies, max_diff = check_additivity(shap_values, predictions, base_value)
         assert satisfies

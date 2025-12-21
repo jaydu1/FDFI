@@ -8,8 +8,8 @@ __version__ = "0.1.0"
 __author__ = "FDFI Team"
 
 # Import main explainer classes when they are implemented
-# from .explainers import Explainer
-# from .plots import plot
+# from .explainers import Explainer, TreeExplainer, LinearExplainer, KernelExplainer
+# from .plots import summary_plot, waterfall_plot, force_plot, dependence_plot
 
 __all__ = [
     "__version__",
