@@ -6,7 +6,10 @@ flow-disentangled feature importance.
 """
 
 import numpy as np
-from typing import Optional, Union, Callable, Any
+import torch
+from typing import Optional, Union, Callable, Any, Tuple
+from .models import FlowMatchingModel
+
 
 
 class Explainer:
@@ -49,6 +52,7 @@ class Explainer:
     >>> # explanations = explainer(X_test)
     """
     
+    
     def __init__(
         self,
         model: Callable[[np.ndarray], np.ndarray],
@@ -59,6 +63,14 @@ class Explainer:
         self.model = model
         self.data = data
         self.kwargs = kwargs
+        
+        self.flow_engine = FlowMatchingModel(
+            X=data,
+            dim=data.shape[1],
+            device=kwargs.get("device")
+        )
+        print("Training flow model for disentanglement...")
+        self.flow_engine.fit(num_steps=kwargs.get("num_steps", 5000))
     
     def __call__(
         self,
@@ -85,6 +97,9 @@ class Explainer:
         NotImplementedError
             This method must be implemented by subclasses.
         """
+        n_samples, n_features = X.shape
+        attributions = np.zeros((n_samples, n_features))
+        
         raise NotImplementedError(
             "Explainer.__call__ must be implemented by subclasses"
         )
@@ -270,3 +285,89 @@ class KernelExplainer(Explainer):
             "KernelExplainer is not yet fully implemented. "
             "Please refer to the documentation for upcoming features."
         )
+        
+class DFIExplainer(Explainer):
+    def __init__(
+        self,
+        model: Callable[[np.ndarray], np.ndarray],
+        data: np.ndarray,
+        nsamples: int = 50,
+        **kwargs: Any
+    ):
+        """Initialize the DFIExplainer."""
+        super().__init__(model, data, **kwargs)
+        self.nsamples = nsamples
+        self.regularize = kwargs.get("regularize", 1e-6)
+
+       
+        self.mean = np.mean(data, axis=0, keepdims=True)
+        
+        self.cov = np.cov(data, rowvar=False)
+        self.cov = (self.cov + self.cov.T) / 2  
+
+      
+        eigenvals, eigenvecs = np.linalg.eigh(self.cov)
+        eigenvals = np.maximum(eigenvals, self.regularize) 
+
+        
+        self.L = eigenvecs @ np.diag(eigenvals**0.5) @ eigenvecs.T
+       
+        self.L_inv = eigenvecs @ np.diag(eigenvals**-0.5) @ eigenvecs.T
+
+        self.Z_full = (data - self.mean) @ self.L_inv
+
+    def __call__(self, X: np.ndarray, **kwargs: Any) -> np.ndarray:
+       
+        n, d = X.shape
+        Z = (X - self.mean) @ self.L_inv
+        
+    
+        y_pred = self.model(X)
+        
+       
+        # get per-sample UEIFs in latent space (n_samples, n_features)
+        ueifs_Z = self._phi_Z(Z, y_pred)
+
+        # Jacobian sensitivity matrix (constant for linear mapping)
+        H = self.L ** 2
+        # Map latent-space UEIFs back to original X-space per-sample
+        ueifs_X = ueifs_Z @ H.T
+
+        # Aggregate to get mean importance and uncertainty (std) across samples
+        phi_X = np.mean(ueifs_X, axis=0)
+        std_X = np.std(ueifs_X, axis=0)
+
+        phi_Z = np.mean(ueifs_Z, axis=0)
+        std_Z = np.std(ueifs_Z, axis=0)
+
+        return {
+            "phi_X": phi_X,
+            "std_X": std_X,
+            "phi_Z": phi_Z,
+            "std_Z": std_Z,
+        }
+
+    def _phi_Z(self, Z: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+       
+        n, d = Z.shape
+        ueifs_Z = np.zeros((n, d))
+        
+        for j in range(d):
+
+            rng = np.random.default_rng(j)
+            resample_idx = rng.choice(self.Z_full.shape[0], size=(self.nsamples, n), replace=True)
+            
+            # Z_tilde: (nsamples, n, d)
+            Z_tilde = np.tile(Z[None, :, :], (self.nsamples, 1, 1))
+            Z_tilde[:, :, j] = self.Z_full[resample_idx, j]
+            
+            Z_tilde_flat = Z_tilde.reshape(-1, d)
+            X_tilde_flat = Z_tilde_flat @ self.L + self.mean
+            
+            y_tilde_flat = self.model(X_tilde_flat)
+            y_tilde = y_tilde_flat.reshape(self.nsamples, n).mean(axis=0)
+            
+            ueifs_Z[:, j] = (y_pred - y_tilde) ** 2
+
+        # Return per-sample UEIFs in latent space (no aggregation here)
+        return ueifs_Z
