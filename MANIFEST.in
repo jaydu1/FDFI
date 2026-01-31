@@ -1,7 +1,5 @@
 include README.md
 include LICENSE
-include requirements.txt
-include requirements-dev.txt
 include pyproject.toml
 
 recursive-include fdfi *.py

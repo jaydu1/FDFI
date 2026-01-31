@@ -18,17 +18,12 @@ pip install -e .
 
 ### Dependencies
 
-Core dependencies:
-- numpy >= 1.20.0
-- scipy >= 1.7.0
+Install extras via `pyproject.toml`:
 
-Optional dependencies:
-- matplotlib >= 3.5.0 (for plotting)
-- seaborn >= 0.12.0 (for advanced plots)
-
-Development dependencies:
 ```bash
 pip install -e ".[dev]"
+pip install -e ".[plots]"
+pip install -e ".[flow]"
 ```
 
 ## Quick Start
@@ -60,6 +55,43 @@ X_test = np.random.randn(10, 10)
 - `TreeExplainer`: Optimized for tree-based models
 - `LinearExplainer`: Optimized for linear models
 - `KernelExplainer`: Model-agnostic explainer
+- `OTExplainer`: Gaussian optimal-transport DFI (no cross-fitting)
+- `EOTExplainer`: Entropic optimal-transport DFI (no cross-fitting)
+
+### Confidence Intervals
+
+All explainers return point estimates and can compute CIs post-hoc:
+
+```python
+results = explainer(X_test)
+ci = explainer.conf_int(alpha=0.05, target="X", alternative="two-sided")
+```
+
+`conf_int` supports variance floors and practical margins:
+```python
+ci = explainer.conf_int(
+    alpha=0.05,
+    var_floor_method="fixed",
+    var_floor_c=0.1,
+    margin_method="mixture",
+    alternative="two-sided",
+)
+```
+
+### EOT Options
+
+`EOTExplainer` supports adaptive epsilon, stochastic transport, and target choices:
+
+```python
+explainer = EOTExplainer(
+    model.predict,
+    X_background,
+    auto_epsilon=True,
+    stochastic_transport=True,
+    n_transport_samples=10,
+    target="gaussian",  # or "empirical"
+)
+```
 
 ### Plotting Functions
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fdfi"
-version = "0.1.0"
+version = "0.0.1"
 description = "Flow-Disentangled Feature Importance"
 readme = "README.md"
 authors = [
@@ -40,6 +40,10 @@ dev = [
     "flake8>=6.0.0",
     "mypy>=1.0.0",
     "isort>=5.12.0",
+]
+flow = [
+    "torch>=2.0.0",
+    "torchdiffeq>=0.2.3",
 ]
 plots = [
     "matplotlib>=3.5.0",
@@ -94,7 +98,7 @@ disallow_incomplete_defs = false
 
 [tool.coverage.run]
 source = ["fdfi"]
-omit = ["tests/*", "setup.py"]
+omit = ["tests/*"]
 
 [tool.coverage.report]
 exclude_lines = [

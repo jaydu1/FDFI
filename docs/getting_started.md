@@ -77,6 +77,50 @@ from fdfi.explainers import KernelExplainer
 explainer = KernelExplainer(model.predict, X_background)
 ```
 
+### OTExplainer (Gaussian OT)
+
+Gaussian optimal-transport DFI (no cross-fitting):
+
+```python
+from fdfi.explainers import OTExplainer
+
+explainer = OTExplainer(model.predict, X_background, nsamples=50)
+results = explainer(X_test)
+```
+
+### EOTExplainer (Entropic OT)
+
+Entropic OT DFI using a learned transport kernel:
+
+```python
+from fdfi.explainers import EOTExplainer
+
+explainer = EOTExplainer(model.predict, X_background, epsilon=0.1, nsamples=50)
+results = explainer(X_test)
+```
+
+#### EOT Options
+
+```python
+explainer = EOTExplainer(
+    model.predict,
+    X_background,
+    auto_epsilon=True,
+    stochastic_transport=True,
+    n_transport_samples=10,
+    target="gaussian",  # or "empirical"
+)
+```
+
+### Confidence Intervals
+
+All explainers support post-hoc CIs via `conf_int`:
+
+```python
+results = explainer(X_test)
+ci = explainer.conf_int(alpha=0.05, target="X", alternative="two-sided")
+```
+
 ## Next Steps
 
 - See `examples/` directory for complete examples
