@@ -1,7 +1,8 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestRegressor
-from fdfi.explainers import DFIExplainer  
+from fdfi.explainers import OTExplainer, EOTExplainer
 
 
 def generate_exp3_data(n=1000, rho=0.8, seed=42):
@@ -22,6 +23,18 @@ def generate_exp3_data(n=1000, rho=0.8, seed=42):
     return X, y
 
 
+USE_EOT = os.getenv("FDFI_USE_EOT", "0").lower() in ("1", "true", "yes")
+
+CI_ALPHA = 0.05
+CI_TARGET = "X"
+CI_ALTERNATIVE = "two-sided"
+CI_VAR_FLOOR_METHOD = "fixed"  # or "mixture"
+CI_VAR_FLOOR_C = 0.0
+CI_MARGIN_METHOD = "fixed"  # or "mixture"
+
+# Use default EOT settings via:
+# FDFI_USE_EOT=1 python examples/verify_exp3.py
+
 print("Step 1: Generating Exp3 simulation data...")
 X_train, y_train = generate_exp3_data(n=2000, rho=0.8, seed=1)
 X_test, _ = generate_exp3_data(n=1000, rho=0.8, seed=2)
@@ -30,19 +43,33 @@ print("Step 2: Fitting Black-box Model (Random Forest)...")
 model = RandomForestRegressor(n_estimators=500, n_jobs=-1, random_state=42)
 model.fit(X_train, y_train)
 
-print("Step 3: Running your DFIExplainer...")
+explainer_name = "EOTExplainer" if USE_EOT else "OTExplainer"
+print(f"Step 3: Running {explainer_name}...")
 
-explainer = DFIExplainer(model.predict, X_train, nsamples=50)
+if USE_EOT:
+    explainer = EOTExplainer(model.predict, X_train)
+else:
+    explainer = OTExplainer(model.predict, X_train, nsamples=50)
 
 results = explainer(X_test)
 phi_values = results['phi_X']
-std_values = results['std_X']
+ci = explainer.conf_int(
+    alpha=CI_ALPHA,
+    target=CI_TARGET,
+    alternative=CI_ALTERNATIVE,
+    var_floor_method=CI_VAR_FLOOR_METHOD,
+    var_floor_c=CI_VAR_FLOOR_C,
+    margin_method=CI_MARGIN_METHOD,
+)
+ci_lower = ci["ci_lower"]
+ci_upper = ci["ci_upper"]
+ci_values = np.maximum(phi_values - ci_lower, ci_upper - phi_values)
 
 plt.figure(figsize=(14, 8))
 colors = ['#E45756']*5 + ['#1f77b4']*5 + ['#7f7f7f']*40
 
 # Plot bars with styled error bars (thinner, more subtle)
-bars = plt.bar(range(50), phi_values, yerr=std_values, color=colors, capsize=2, 
+bars = plt.bar(range(50), phi_values, yerr=ci_values, color=colors, capsize=2, 
                error_kw={'ecolor': 'black', 'elinewidth': 0.5, 'alpha': 0.5})
 
 # Add reference lines
@@ -57,7 +84,7 @@ plt.xlabel("Feature Index", fontsize=12)
 plt.ylabel("Importance Score", fontsize=12)
 
 # Set Y-axis limits with breathing room for labels and legend
-max_y = np.max(phi_values + std_values)
+max_y = np.max(phi_values + ci_values)
 plt.ylim(-0.02, max_y * 1.45)
 
 # Calculate label position (centered within each group)
@@ -75,11 +102,12 @@ plt.grid(axis='y', linestyle='--', alpha=0.3)
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 
+ci_label = f"Uncertainty ({int((1 - CI_ALPHA) * 100)}% CI)"
 legend_elements = [
     Patch(facecolor='#E45756', label='Active Features'),
     Patch(facecolor='#1f77b4', label='Correlated Nulls (Spurious)'),
     Patch(facecolor='#7f7f7f', label='Independent Nulls (Noise)'),
-    Line2D([0], [0], color='black', lw=1, label='Uncertainty (±1 SD)')
+    Line2D([0], [0], color='black', lw=1, label=ci_label)
 ]
 
 plt.legend(handles=legend_elements, loc='upper right', fontsize=10, framealpha=0.95)
@@ -90,5 +118,9 @@ plt.tight_layout()
 print("\nResults Summary:")
 print(f"Active Features Avg Score: {np.mean(phi_values[:5]):.4f}")
 print(f"Correlated Nulls Avg Score: {np.mean(phi_values[5:10]):.4f}")
+lower_ci = ci_lower[:10]
+ci_pct = int((1 - CI_ALPHA) * 100)
+print(f"First 10 features lower bound ({ci_pct}% CI) min: {np.min(lower_ci):.4f}")
+print(f"First 10 features lower bound ({ci_pct}% CI) > 0: {np.all(lower_ci > 0)}")
 
 plt.show()

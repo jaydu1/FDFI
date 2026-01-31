@@ -6,9 +6,10 @@ flow-disentangled feature importance.
 """
 
 import numpy as np
-import torch
 from typing import Optional, Union, Callable, Any, Tuple
-from .models import FlowMatchingModel
+from scipy.spatial.distance import cdist, pdist
+from scipy import stats
+from .utils import TwoComponentMixture, detect_feature_types, gower_cost_matrix
 
 
 
@@ -18,6 +19,8 @@ class Explainer:
     
     This class provides the interface for computing feature importance
     using flow-disentangled methods, similar to SHAP explainers.
+    It also provides post-hoc confidence intervals via `conf_int()` and
+    formatted summaries via `summary()`.
     
     Parameters
     ----------
@@ -63,14 +66,187 @@ class Explainer:
         self.model = model
         self.data = data
         self.kwargs = kwargs
-        
-        self.flow_engine = FlowMatchingModel(
-            X=data,
-            dim=data.shape[1],
-            device=kwargs.get("device")
+        self._last_results = None
+        self._last_n = None
+        self._var_floor_mixture = None
+        self._margin_mixture = None
+        self._var_floor_value = None
+
+        fit_flow = kwargs.get("fit_flow", True)
+        self.flow_engine = None
+        if data is not None and fit_flow:
+            try:
+                from .models import FlowMatchingModel
+            except ImportError as exc:
+                raise ImportError(
+                    "Flow matching requires torch; install it or pass fit_flow=False."
+                ) from exc
+            self.flow_engine = FlowMatchingModel(
+                X=data,
+                dim=data.shape[1],
+                device=kwargs.get("device")
+            )
+            print("Training flow model for disentanglement...")
+            self.flow_engine.fit(num_steps=kwargs.get("num_steps", 5000))
+
+    def _cache_results(self, results: dict, n: int) -> None:
+        self._last_results = results
+        self._last_n = n
+
+    def _adjust_se(
+        self,
+        se_raw: np.ndarray,
+        var_floor_c: float = 0.1,
+        var_floor_method: str = "fixed",
+        var_floor_quantile: float = 0.05,
+    ) -> np.ndarray:
+        if self._last_n is None:
+            return se_raw
+
+        if var_floor_method == "mixture":
+            self._var_floor_mixture = TwoComponentMixture().fit(se_raw)
+            floor = self._var_floor_mixture.quantile(var_floor_quantile, "smaller")
+            self._var_floor_value = floor
+        else:
+            if var_floor_c <= 0:
+                return se_raw
+            floor = var_floor_c / np.sqrt(self._last_n)
+            self._var_floor_value = floor
+
+        return np.sqrt(se_raw**2 + floor**2)
+
+    def conf_int(
+        self,
+        alpha: float = 0.05,
+        target: str = "X",
+        var_floor_c: float = 0.1,
+        var_floor_method: str = "fixed",
+        var_floor_quantile: float = 0.95,
+        margin: float = 0.0,
+        margin_method: str = "fixed",
+        margin_quantile: float = 0.95,
+        alternative: str = "two-sided",
+    ) -> dict:
+        if self._last_results is None:
+            raise ValueError("Run the explainer first to compute scores.")
+
+        if target == "Z":
+            phi_hat = self._last_results["phi_Z"]
+            se_raw = self._last_results["se_Z"]
+        else:
+            phi_hat = self._last_results["phi_X"]
+            se_raw = self._last_results["se_X"]
+
+        se_adj = self._adjust_se(
+            se_raw,
+            var_floor_c=var_floor_c,
+            var_floor_method=var_floor_method,
+            var_floor_quantile=var_floor_quantile,
         )
-        print("Training flow model for disentanglement...")
-        self.flow_engine.fit(num_steps=kwargs.get("num_steps", 5000))
+
+        if margin_method == "mixture":
+            self._margin_mixture = TwoComponentMixture().fit(phi_hat)
+            margin = max(self._margin_mixture.quantile(margin_quantile, "smaller"), 0)
+        else:
+            self._margin_mixture = None
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            if alternative == "greater":
+                z = stats.norm.ppf(1 - alpha)
+                ci_lower = phi_hat - z * se_adj
+                ci_upper = np.full_like(phi_hat, np.inf)
+                reject_null = ci_lower > margin
+                z_scores = (phi_hat - margin) / se_adj
+                pvalues = 1 - stats.norm.cdf(z_scores)
+            elif alternative == "less":
+                z = stats.norm.ppf(1 - alpha)
+                ci_lower = np.full_like(phi_hat, -np.inf)
+                ci_upper = phi_hat + z * se_adj
+                reject_null = ci_upper < margin
+                z_scores = (phi_hat - margin) / se_adj
+                pvalues = stats.norm.cdf(z_scores)
+            elif alternative == "two-sided":
+                z = stats.norm.ppf(1 - alpha / 2)
+                ci_lower = phi_hat - z * se_adj
+                ci_upper = phi_hat + z * se_adj
+                reject_null = (ci_lower > margin) | (ci_upper < margin)
+                z_scores = np.abs(phi_hat - margin) / se_adj
+                pvalues = 2 * (1 - stats.norm.cdf(z_scores))
+            else:
+                raise ValueError(
+                    "alternative must be 'greater', 'less', or 'two-sided'"
+                )
+
+            pvalues = np.where(np.isfinite(pvalues), pvalues, 1.0)
+
+        return {
+            "phi_hat": phi_hat,
+            "se": se_adj,
+            "ci_lower": ci_lower,
+            "ci_upper": ci_upper,
+            "reject_null": reject_null,
+            "pvalue": pvalues,
+            "margin": margin,
+            "alternative": alternative,
+        }
+
+    def summary(self, alpha: float = 0.05, print_output: bool = True, **kwargs) -> str:
+        results = self.conf_int(alpha=alpha, **kwargs)
+        return self._format_summary(results, alpha, print_output)
+
+    def _format_summary(self, results: dict, alpha: float, print_output: bool = True) -> str:
+        lines = []
+        lines.append("=" * 78)
+        lines.append("Feature Importance Results")
+        lines.append("=" * 78)
+        lines.append(f"Method: {self.__class__.__name__}")
+        lines.append(f"Number of features: {len(results['phi_hat'])}")
+        lines.append(f"Significance level: {alpha}")
+        lines.append(f"Alternative: {results['alternative']}")
+        if results["margin"] > 0:
+            lines.append(f"Practical margin: {results['margin']:.4f}")
+        lines.append("-" * 78)
+
+        header = (
+            f"{'Feature':>8} {'Estimate':>10} {'Std Err':>10} "
+            f"{'CI Lower':>10} {'CI Upper':>10} {'P-value':>10} {'Sig':>5}"
+        )
+        lines.append(header)
+        lines.append("-" * 78)
+
+        for i in range(len(results["phi_hat"])):
+            ci_lower = results["ci_lower"][i]
+            ci_upper = results["ci_upper"][i]
+            ci_upper_str = (
+                f"{ci_upper:>10.4f}" if np.isfinite(ci_upper) else f"{'inf':>10}"
+            )
+            ci_lower_str = (
+                f"{ci_lower:>10.4f}" if np.isfinite(ci_lower) else f"{'-inf':>10}"
+            )
+            pval = results["pvalue"][i]
+            sig = (
+                "***"
+                if pval < 0.01
+                else ("**" if pval < 0.05 else ("*" if pval < 0.1 else ""))
+            )
+            row = (
+                f"{i:>8} {results['phi_hat'][i]:>10.4f} "
+                f"{results['se'][i]:>10.4f} {ci_lower_str} {ci_upper_str} "
+                f"{pval:>10.4f} {sig:>5}"
+            )
+            lines.append(row)
+
+        lines.append("=" * 78)
+        n_sig = np.sum(results["reject_null"])
+        lines.append(f"Significant features: {n_sig} / {len(results['phi_hat'])}")
+        lines.append("---")
+        lines.append("Signif. codes:  0 '***' 0.01 '**' 0.05 '*' 0.1 ' ' 1")
+        lines.append("=" * 78)
+
+        output = "\n".join(lines)
+        if print_output:
+            print(output)
+        return output
     
     def __call__(
         self,
@@ -286,23 +462,32 @@ class KernelExplainer(Explainer):
             "Please refer to the documentation for upcoming features."
         )
         
-class DFIExplainer(Explainer):
+class OTExplainer(Explainer):
+    """
+    Optimal-transport DFI explainer using Gaussian transport.
+
+    This is the Gaussian DFI estimator without cross-fitting.
+    """
     def __init__(
         self,
         model: Callable[[np.ndarray], np.ndarray],
         data: np.ndarray,
         nsamples: int = 50,
+        sampling_method: str = "resample",
+        random_state: int = 0,
         **kwargs: Any
     ):
-        """Initialize the DFIExplainer."""
-        super().__init__(model, data, **kwargs)
+        """Initialize the OTExplainer."""
+        super().__init__(model, data, fit_flow=False, **kwargs)
         self.nsamples = nsamples
         self.regularize = kwargs.get("regularize", 1e-6)
+        self.sampling_method = sampling_method
+        self.random_state = random_state
 
        
         self.mean = np.mean(data, axis=0, keepdims=True)
         
-        self.cov = np.cov(data, rowvar=False)
+        self.cov = np.cov(data, rowvar=False, ddof=0)
         self.cov = (self.cov + self.cov.T) / 2  
 
       
@@ -334,18 +519,26 @@ class DFIExplainer(Explainer):
         ueifs_X = ueifs_Z @ H.T
 
         # Aggregate to get mean importance and uncertainty (std) across samples
+        n = ueifs_X.shape[0]
+        ddof = 1 if n > 1 else 0
         phi_X = np.mean(ueifs_X, axis=0)
         std_X = np.std(ueifs_X, axis=0)
+        se_X = np.std(ueifs_X, axis=0, ddof=ddof) / np.sqrt(n)
 
         phi_Z = np.mean(ueifs_Z, axis=0)
         std_Z = np.std(ueifs_Z, axis=0)
+        se_Z = np.std(ueifs_Z, axis=0, ddof=ddof) / np.sqrt(n)
 
-        return {
+        results = {
             "phi_X": phi_X,
             "std_X": std_X,
+            "se_X": se_X,
             "phi_Z": phi_Z,
             "std_Z": std_Z,
+            "se_Z": se_Z,
         }
+        self._cache_results(results, n)
+        return results
 
     def _phi_Z(self, Z: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
        
@@ -354,12 +547,22 @@ class DFIExplainer(Explainer):
         
         for j in range(d):
 
-            rng = np.random.default_rng(j)
-            resample_idx = rng.choice(self.Z_full.shape[0], size=(self.nsamples, n), replace=True)
+            rng = np.random.default_rng(self.random_state + j)
             
             # Z_tilde: (nsamples, n, d)
             Z_tilde = np.tile(Z[None, :, :], (self.nsamples, 1, 1))
-            Z_tilde[:, :, j] = self.Z_full[resample_idx, j]
+            if self.sampling_method == "resample":
+                resample_idx = rng.choice(
+                    self.Z_full.shape[0], size=(self.nsamples, n), replace=True
+                )
+                Z_tilde[:, :, j] = self.Z_full[resample_idx, j]
+            elif self.sampling_method == "permutation":
+                perm_idx = np.array([rng.permutation(n) for _ in range(self.nsamples)])
+                Z_tilde[:, :, j] = Z[perm_idx, j]
+            elif self.sampling_method == "normal":
+                Z_tilde[:, :, j] = rng.normal(0.0, 1.0, size=(self.nsamples, n))
+            else:
+                raise ValueError(f"Unknown sampling_method: {self.sampling_method}")
             
             Z_tilde_flat = Z_tilde.reshape(-1, d)
             X_tilde_flat = Z_tilde_flat @ self.L + self.mean
@@ -371,3 +574,271 @@ class DFIExplainer(Explainer):
 
         # Return per-sample UEIFs in latent space (no aggregation here)
         return ueifs_Z
+
+
+class EOTExplainer(Explainer):
+    """
+    Entropic optimal-transport DFI explainer (no cross-fitting).
+
+    Fits an entropic transport on background data, then uses it to
+    resample Z for counterfactual evaluation with the provided model.
+    Supports adaptive epsilon, stochastic transport sampling, and
+    Gaussian/empirical targets.
+
+    Notable options:
+      - auto_epsilon: enable median-distance heuristic
+      - stochastic_transport: sample from k(z|x) instead of barycentric map
+      - target: "gaussian" or "empirical" transport target
+    """
+    def __init__(
+        self,
+        model: Callable[[np.ndarray], np.ndarray],
+        data: np.ndarray,
+        nsamples: int = 50,
+        epsilon: float = 0.1,
+        auto_epsilon: bool = False,
+        target: str = "gaussian",
+        transport_type: str = "entropic",
+        alpha: float = 0.5,
+        n_iter: int = 100,
+        tol: float = 1e-6,
+        cost_metric: str = "sqeuclidean",
+        cost_fn: Optional[Callable[..., np.ndarray]] = None,
+        cost_kwargs: Optional[dict] = None,
+        categorical_threshold: int = 10,
+        feature_types: Optional[np.ndarray] = None,
+        feature_weights: Optional[np.ndarray] = None,
+        sampling_method: str = "resample",
+        stochastic_transport: bool = False,
+        n_transport_samples: int = 10,
+        random_state: int = 0,
+        **kwargs: Any
+    ):
+        super().__init__(model, data, fit_flow=False, **kwargs)
+        self.nsamples = nsamples
+        self.epsilon = epsilon
+        self.auto_epsilon = auto_epsilon
+        self.target = target
+        self.transport_type = transport_type
+        self.alpha = alpha
+        self.n_iter = n_iter
+        self.tol = tol
+        self.cost_metric = cost_metric
+        self.cost_fn = cost_fn
+        self.cost_kwargs = cost_kwargs
+        self.categorical_threshold = categorical_threshold
+        self.feature_types = feature_types
+        self.feature_weights = feature_weights
+        self.sampling_method = sampling_method
+        self.stochastic_transport = stochastic_transport
+        self.n_transport_samples = n_transport_samples
+        self.random_state = random_state
+        self.regularize = kwargs.get("regularize", 1e-6)
+        self.transport_plan_ = None
+        self.Z_target_ = None
+        self.Z_gauss_ = None
+        self.detected_types_ = None
+
+        self.mean = np.mean(data, axis=0, keepdims=True)
+        self.cov = np.cov(data - self.mean, rowvar=False, ddof=0)
+        self.cov = (self.cov + self.cov.T) / 2
+
+        eigenvals, eigenvecs = np.linalg.eigh(self.cov)
+        eigenvals = np.maximum(eigenvals, self.regularize)
+
+        self.L = eigenvecs @ np.diag(eigenvals**0.5) @ eigenvecs.T
+        self.L_inv = eigenvecs @ np.diag(eigenvals**-0.5) @ eigenvecs.T
+
+        X_centered = data - self.mean
+        Z_gauss = X_centered @ self.L_inv
+        self.Z_gauss_ = Z_gauss
+        if self.auto_epsilon:
+            self.epsilon = self._auto_epsilon(X_centered)
+        Z_entropic = self._fit_entropic_Z(X_centered, Z_gauss)
+
+        if self.transport_type == "entropic":
+            self.Z_fit_ = Z_entropic
+        elif self.transport_type == "semiparametric":
+            self.Z_fit_ = (1.0 - self.alpha) * Z_gauss + self.alpha * Z_entropic
+        else:
+            raise ValueError(f"Unknown transport_type: {self.transport_type}")
+
+    def __call__(self, X: np.ndarray, **kwargs: Any) -> np.ndarray:
+        n, d = X.shape
+        Z = (X - self.mean) @ self.L_inv
+        y_pred = self.model(X)
+
+        ueifs_Z = self._phi_Z(Z, y_pred)
+
+        H = self.L ** 2
+        ueifs_X = ueifs_Z @ H.T
+
+        n = ueifs_X.shape[0]
+        ddof = 1 if n > 1 else 0
+        phi_X = np.mean(ueifs_X, axis=0)
+        std_X = np.std(ueifs_X, axis=0)
+        se_X = np.std(ueifs_X, axis=0, ddof=ddof) / np.sqrt(n)
+
+        phi_Z = np.mean(ueifs_Z, axis=0)
+        std_Z = np.std(ueifs_Z, axis=0)
+        se_Z = np.std(ueifs_Z, axis=0, ddof=ddof) / np.sqrt(n)
+
+        results = {
+            "phi_X": phi_X,
+            "std_X": std_X,
+            "se_X": se_X,
+            "phi_Z": phi_Z,
+            "std_Z": std_Z,
+            "se_Z": se_Z,
+        }
+        self._cache_results(results, n)
+        return results
+
+    def _phi_Z(self, Z: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+        n, d = Z.shape
+        ueifs_Z = np.zeros((n, d))
+
+        def compute_y_perm(j: int, rng: np.random.Generator, Z_pool: np.ndarray) -> np.ndarray:
+            Z_tilde = np.tile(Z[None, :, :], (self.nsamples, 1, 1))
+
+            if self.sampling_method == "resample":
+                resample_idx = rng.choice(
+                    Z_pool.shape[0], size=(self.nsamples, n), replace=True
+                )
+                Z_tilde[:, :, j] = Z_pool[resample_idx, j]
+            elif self.sampling_method == "permutation":
+                perm_idx = np.array([rng.permutation(n) for _ in range(self.nsamples)])
+                Z_tilde[:, :, j] = Z[perm_idx, j]
+            elif self.sampling_method == "normal":
+                Z_tilde[:, :, j] = rng.normal(0.0, 1.0, size=(self.nsamples, n))
+            else:
+                raise ValueError(f"Unknown sampling_method: {self.sampling_method}")
+
+            Z_tilde_flat = Z_tilde.reshape(-1, d)
+            X_tilde_flat = Z_tilde_flat @ self.L + self.mean
+
+            y_tilde_flat = self.model(X_tilde_flat)
+            return y_tilde_flat.reshape(self.nsamples, n).mean(axis=0)
+
+        for j in range(d):
+            rng = np.random.default_rng(self.random_state + j)
+            if self.sampling_method == "resample" and self.stochastic_transport:
+                all_y_perm = []
+                for _ in range(self.n_transport_samples):
+                    Z_pool = self._sample_transport_pool(rng)
+                    all_y_perm.append(compute_y_perm(j, rng, Z_pool))
+                y_perm = np.mean(all_y_perm, axis=0)
+            else:
+                y_perm = compute_y_perm(j, rng, self.Z_fit_)
+
+            ueifs_Z[:, j] = (y_pred - y_perm) ** 2
+
+        return ueifs_Z
+
+    def _auto_epsilon(self, X_centered: np.ndarray) -> float:
+        if X_centered.shape[0] < 2:
+            return self.epsilon
+        n = min(1000, X_centered.shape[0])
+        rng = np.random.default_rng(self.random_state)
+        idx = rng.choice(X_centered.shape[0], size=n, replace=False)
+        X_sub = X_centered[idx]
+        dists = pdist(X_sub)
+        if dists.size == 0:
+            return self.epsilon
+        median_dist = np.median(dists)
+        return (median_dist ** 2) / X_centered.shape[1]
+
+    def _make_target(self, Z_gauss: np.ndarray) -> np.ndarray:
+        rng = np.random.default_rng(self.random_state)
+        n, d = Z_gauss.shape
+        if self.target == "gaussian":
+            return rng.standard_normal((n, d))
+        if self.target == "empirical":
+            perm = rng.permutation(n)
+            return Z_gauss[perm]
+        raise ValueError(f"Unknown target: {self.target}")
+
+    def _fit_entropic_Z(self, X_centered: np.ndarray, Z_gauss: np.ndarray) -> np.ndarray:
+        Z_target = self._make_target(Z_gauss)
+        C = self._compute_cost_matrix(X_centered, Z_target)
+        P = self._sinkhorn(C)
+        self.Z_target_ = Z_target
+        self.transport_plan_ = P
+        return P @ Z_target
+
+    def _compute_cost_matrix(self, X: np.ndarray, Z: np.ndarray) -> np.ndarray:
+        if self.cost_fn is not None:
+            kwargs = self.cost_kwargs or {}
+            return self.cost_fn(X, Z, **kwargs)
+
+        if self.cost_metric in ("auto", "gower"):
+            detected = detect_feature_types(
+                X,
+                categorical_threshold=self.categorical_threshold,
+                feature_types=self.feature_types,
+            )
+            self.detected_types_ = detected
+            types = detected["types"]
+            ranges = detected["ranges"]
+            if self.cost_metric == "auto":
+                if np.all(types == "continuous"):
+                    return cdist(X, Z, metric="sqeuclidean")
+            return gower_cost_matrix(
+                X,
+                Z,
+                feature_types=types,
+                feature_ranges=ranges,
+                feature_weights=self.feature_weights,
+            )
+
+        if self.cost_metric == "sqeuclidean":
+            return cdist(X, Z, metric="sqeuclidean")
+
+        return cdist(X, Z, metric=self.cost_metric)
+
+    def _sample_transport_pool(self, rng: np.random.Generator) -> np.ndarray:
+        if self.transport_plan_ is None or self.Z_target_ is None:
+            return self.Z_fit_
+
+        P = self.transport_plan_
+        n, m = P.shape
+        d = self.Z_target_.shape[1]
+        Z_entropic = np.zeros((n, d))
+
+        for i in range(n):
+            probs = P[i]
+            if probs.sum() <= 0:
+                probs = np.ones(m) / m
+            else:
+                probs = probs / probs.sum()
+            idx = rng.choice(m, p=probs)
+            Z_entropic[i] = self.Z_target_[idx]
+
+        if self.transport_type == "semiparametric" and self.Z_gauss_ is not None:
+            return (1.0 - self.alpha) * self.Z_gauss_ + self.alpha * Z_entropic
+        return Z_entropic
+
+    def _sinkhorn(self, C: np.ndarray) -> np.ndarray:
+        n, m = C.shape
+        a = np.ones(n) / n
+        b = np.ones(m) / m
+
+        K = np.exp(-C / self.epsilon)
+        K = np.maximum(K, 1e-300)
+
+        u = np.ones(n)
+        v = np.ones(m)
+
+        for _ in range(self.n_iter):
+            u_prev = u.copy()
+            u = a / (K @ v + 1e-300)
+            v = b / (K.T @ u + 1e-300)
+            if np.max(np.abs(u - u_prev)) < self.tol:
+                break
+
+        P = np.diag(u) @ K @ np.diag(v)
+        row_sums = P.sum(axis=1, keepdims=True)
+        return P / np.maximum(row_sums, 1e-300)
+
+
+DFIExplainer = OTExplainer

@@ -12,6 +12,7 @@ FDFI (Flow-Disentangled Feature Importance) is a Python module that provides int
 ## Features
 
 - 🎯 **Multiple Explainer Types**: Tree, Linear, and Kernel explainers for different model types
+- 🧭 **OT-Based DFI**: Gaussian OT (OTExplainer) and Entropic OT (EOTExplainer)
 - 📊 **Rich Visualizations**: Summary, waterfall, force, and dependence plots
 - 🔧 **Easy to Use**: Simple API similar to SHAP
 - 🚀 **Extensible**: Built with modularity in mind for future enhancements
@@ -28,19 +29,19 @@ pip install -e .
 
 ### Dependencies
 
-```bash
-# Core dependencies
-pip install -r requirements.txt
+Use `pyproject.toml` extras:
 
-# Development dependencies
-pip install -r requirements-dev.txt
+```bash
+pip install -e ".[dev]"
+pip install -e ".[plots]"
+pip install -e ".[flow]"
 ```
 
 ## Quick Start
 
 ```python
 import numpy as np
-from fdfi.explainers import Explainer
+from fdfi.explainers import OTExplainer
 
 # Define your model
 def model(X):
@@ -50,11 +51,33 @@ def model(X):
 X_background = np.random.randn(100, 10)
 
 # Create an explainer
-explainer = Explainer(model, data=X_background)
+explainer = OTExplainer(model, data=X_background, nsamples=50)
 
-# Explain test instances (full implementation coming soon!)
+# Explain test instances
 X_test = np.random.randn(10, 10)
-# shap_values = explainer(X_test)
+results = explainer(X_test)
+
+# Confidence intervals (post-hoc)
+ci = explainer.conf_int(alpha=0.05, target="X", alternative="two-sided")
+```
+
+## EOT Options (Entropic OT)
+
+`EOTExplainer` supports adaptive epsilon, stochastic transport sampling, and
+Gaussian/empirical targets:
+
+```python
+from fdfi.explainers import EOTExplainer
+
+explainer = EOTExplainer(
+    model.predict,
+    X_background,
+    auto_epsilon=True,
+    stochastic_transport=True,
+    n_transport_samples=10,
+    target="gaussian",  # or "empirical"
+)
+results = explainer(X_test)
 ```
 
 ## Project Structure
@@ -77,7 +100,6 @@ FDFI/
 │   ├── README.md
 │   └── getting_started.md
 ├── pyproject.toml        # Package configuration
-├── requirements.txt      # Core dependencies
 └── README.md            # This file
 ```
 
