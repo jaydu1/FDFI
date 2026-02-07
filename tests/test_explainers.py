@@ -4,7 +4,7 @@ Tests for FDFI explainers.
 
 import pytest
 import numpy as np
-from fdfi.explainers import (
+from dfi.explainers import (
     Explainer,
     TreeExplainer,
     LinearExplainer,

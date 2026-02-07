@@ -1,5 +1,5 @@
 """
-Plotting utilities for FDFI.
+Plotting utilities for DFI.
 
 This module provides visualization functions for feature importance,
 similar to SHAP's plotting capabilities.
@@ -39,7 +39,7 @@ def summary_plot(
     Examples
     --------
     >>> import numpy as np
-    >>> from fdfi.plots import summary_plot
+    >>> from dfi.plots import summary_plot
     >>> 
     >>> # Create dummy data
     >>> shap_values = np.random.randn(100, 10)
@@ -83,7 +83,7 @@ def waterfall_plot(
     Examples
     --------
     >>> import numpy as np
-    >>> from fdfi.plots import waterfall_plot
+    >>> from dfi.plots import waterfall_plot
     >>> 
     >>> # Create dummy data for one sample
     >>> shap_values = np.random.randn(10)
@@ -128,7 +128,7 @@ def force_plot(
     Examples
     --------
     >>> import numpy as np
-    >>> from fdfi.plots import force_plot
+    >>> from dfi.plots import force_plot
     >>> 
     >>> # Create dummy data
     >>> base_value = 0.5
@@ -176,7 +176,7 @@ def dependence_plot(
     Examples
     --------
     >>> import numpy as np
-    >>> from fdfi.plots import dependence_plot
+    >>> from dfi.plots import dependence_plot
     >>> 
     >>> # Create dummy data
     >>> shap_values = np.random.randn(100, 10)

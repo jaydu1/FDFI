@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fdfi"
+name = "dfi"
 version = "0.0.1"
-description = "Flow-Disentangled Feature Importance"
+description = "Disentangled Feature Importance"
 readme = "README.md"
 authors = [
     {name = "FDFI Team"}
@@ -67,10 +67,10 @@ Repository = "https://github.com/jaydu1/FDFI"
 Issues = "https://github.com/jaydu1/FDFI/issues"
 
 [tool.setuptools]
-packages = ["fdfi"]
+packages = ["dfi"]
 
 [tool.setuptools.package-data]
-fdfi = ["py.typed"]
+dfi = ["py.typed"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
@@ -97,7 +97,7 @@ disallow_untyped_defs = false
 disallow_incomplete_defs = false
 
 [tool.coverage.run]
-source = ["fdfi"]
+source = ["dfi"]
 omit = ["tests/*"]
 
 [tool.coverage.report]

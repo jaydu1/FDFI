@@ -6,7 +6,7 @@ Note: This is a template. Full implementation coming soon.
 """
 
 import numpy as np
-from fdfi.explainers import TreeExplainer
+from dfi.explainers import TreeExplainer
 
 
 def main():
@@ -27,7 +27,7 @@ def main():
     print("\nExample code structure:")
     print("```python")
     print("from sklearn.ensemble import RandomForestClassifier")
-    print("from fdfi.explainers import TreeExplainer")
+    print("from dfi.explainers import TreeExplainer")
     print("")
     print("# Train model")
     print("model = RandomForestClassifier()")

@@ -5,7 +5,7 @@ This example demonstrates how to use FDFI explainers with a simple model.
 """
 
 import numpy as np
-from fdfi.explainers import Explainer
+from dfi.explainers import Explainer
 
 
 def main():

@@ -1,8 +1,8 @@
 """
-Explainer classes for FDFI.
+Explainer classes for DFI.
 
 This module contains the main explainer classes for computing
-flow-disentangled feature importance.
+disentangled feature importance.
 """
 
 import numpy as np
@@ -15,10 +15,10 @@ from .utils import TwoComponentMixture, detect_feature_types, gower_cost_matrix
 
 class Explainer:
     """
-    Base class for FDFI explainers.
+    Base class for DFI explainers.
     
     This class provides the interface for computing feature importance
-    using flow-disentangled methods, similar to SHAP explainers.
+    using disentangled methods, similar to SHAP explainers.
     It also provides post-hoc confidence intervals via `conf_int()` and
     formatted summaries via `summary()`.
     
@@ -42,7 +42,7 @@ class Explainer:
     Examples
     --------
     >>> import numpy as np
-    >>> from fdfi import Explainer
+    >>> from dfi import Explainer
     >>> 
     >>> # Define a simple model
     >>> def model(x):

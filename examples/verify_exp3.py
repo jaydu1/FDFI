@@ -2,7 +2,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestRegressor
-from fdfi.explainers import OTExplainer, EOTExplainer
+from dfi.explainers import OTExplainer, EOTExplainer
 
 
 def generate_exp3_data(n=1000, rho=0.8, seed=42):

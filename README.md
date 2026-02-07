@@ -1,13 +1,13 @@
-# FDFI - Flow-Disentangled Feature Importance
+# DFI - Disentangled Feature Importance
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 
-A Python library for computing feature importance using flow-disentangled methods, inspired by SHAP.
+A Python library for computing feature importance using disentangled methods, inspired by SHAP.
 
 ## Overview
 
-FDFI (Flow-Disentangled Feature Importance) is a Python module that provides interpretable machine learning explanations through flow-disentangled feature importance methods. Similar to SHAP, FDFI helps you understand which features are driving your model's predictions.
+DFI (Disentangled Feature Importance) is a Python module that provides interpretable machine learning explanations through disentangled feature importance methods. This package implements both DFI (Disentangled Feature Importance) and FDFI (Flow-DFI) methods. Similar to SHAP, DFI helps you understand which features are driving your model's predictions.
 
 ## Features
 
@@ -41,7 +41,7 @@ pip install -e ".[flow]"
 
 ```python
 import numpy as np
-from fdfi.explainers import OTExplainer
+from dfi.explainers import OTExplainer
 
 # Define your model
 def model(X):
@@ -67,7 +67,7 @@ ci = explainer.conf_int(alpha=0.05, target="X", alternative="two-sided")
 Gaussian/empirical targets:
 
 ```python
-from fdfi.explainers import EOTExplainer
+from dfi.explainers import EOTExplainer
 
 explainer = EOTExplainer(
     model.predict,
@@ -84,7 +84,7 @@ results = explainer(X_test)
 
 ```
 FDFI/
-├── fdfi/                  # Main package directory
+├── dfi/                   # Main package directory
 │   ├── __init__.py       # Package initialization
 │   ├── explainers.py     # Explainer classes
 │   ├── plots.py          # Visualization functions
@@ -105,7 +105,7 @@ FDFI/
 
 ## Development Status
 
-🚧 **This is starter code for FDFI development.** The core structure and API are in place, but full implementations are coming soon.
+🚧 **This is starter code for DFI development.** The core structure and API are in place, but full implementations are coming soon.
 
 Current status:
 - ✅ Package structure established
@@ -127,7 +127,7 @@ pip install -e ".[dev]"
 pytest
 
 # Run tests with coverage
-pytest --cov=fdfi --cov-report=html
+pytest --cov=dfi --cov-report=html
 ```
 
 ## Examples
@@ -155,20 +155,37 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## References
 
-FDFI is inspired by:
+FDFI is based on:
+- Du, J.-H., Roeder, K., & Wasserman, L. (2025). Disentangled Feature Importance. *arXiv preprint arXiv:2507.00260*.
+- Chen, X., Guo, Y., & Du, J.-H. (2026). Flow-Disentangled Feature Importance. In *The Thirteenth International Conference on Learning Representations (ICLR)*.
+
+Related work:
 - [SHAP](https://github.com/slundberg/shap): A game theoretic approach to explain machine learning models
-- Flow-disentangled feature importance methodology
 
 ## Citation
 
-If you use FDFI in your research, please cite:
+If you use DFI in your research, please cite:
 
 ```bibtex
-@software{fdfi2024,
-  title={FDFI: Flow-Disentangled Feature Importance},
-  author={FDFI Team},
-  year={2024},
+@software{dfi2026,
+  title={DFI: Disentangled Feature Importance},
+  author={DFI Team},
+  year={2026},
   url={https://github.com/jaydu1/FDFI}
+}
+
+@article{du2025disentangled,
+  title={Disentangled Feature Importance},
+  author={Du, Jin-Hong and Roeder, Kathryn and Wasserman, Larry},
+  journal={arXiv preprint arXiv:2507.00260},
+  year={2025}
+}
+
+@inproceedings{chen2026flow,
+  title={Flow-Disentangled Feature Importance},
+  author={Chen, Xin and Guo, Yifan and Du, Jin-Hong},
+  booktitle={The Thirteenth International Conference on Learning Representations},
+  year={2026}
 }
 ```
 
