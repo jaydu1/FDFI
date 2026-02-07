@@ -1,0 +1,7 @@
+# Documentation build requirements
+sphinx>=5.0.0
+sphinx-rtd-theme>=1.2.0
+myst-parser>=1.0.0
+nbsphinx>=0.9.0
+pandoc>=2.3
+ipykernel>=6.0.0
