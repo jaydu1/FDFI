@@ -1,0 +1,32 @@
+API Reference
+=============
+
+This section contains the complete API reference for FDFI, auto-generated from 
+the source code docstrings.
+
+.. toctree::
+   :maxdepth: 2
+
+   explainers
+   plots
+   utils
+
+Overview
+--------
+
+FDFI provides the following main modules:
+
+**Explainers** (:mod:`dfi.explainers`)
+   Core explainer classes for computing feature importance. Includes base 
+   ``Explainer`` class, specialized explainers (``TreeExplainer``, 
+   ``LinearExplainer``, ``KernelExplainer``), and optimal transport-based 
+   explainers (``OTExplainer``, ``EOTExplainer``).
+
+**Plotting** (:mod:`dfi.plots`)
+   Visualization functions for feature importance including summary plots, 
+   waterfall plots, force plots, and dependence plots.
+
+**Utilities** (:mod:`dfi.utils`)
+   Helper functions for input validation, data sampling, feature name 
+   management, and statistical utilities like the ``TwoComponentMixture`` 
+   class for variance floor estimation.

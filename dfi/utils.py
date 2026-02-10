@@ -1,5 +1,5 @@
 """
-Utility functions for FDFI.
+Utility functions for DFI.
 
 This module provides helper functions used across the package.
 """
