@@ -1,10 +1,10 @@
 """
-Tests for FDFI plotting functions.
+Tests for dfi plotting functions.
 """
 
 import pytest
 import numpy as np
-from fdfi.plots import (
+from dfi.plots import (
     summary_plot,
     waterfall_plot,
     force_plot,

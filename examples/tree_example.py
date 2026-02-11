@@ -1,12 +1,12 @@
 """
-Tree Model Example: Using FDFI with Tree-Based Models
+Tree Model Example: Using dfi with Tree-Based Models
 
-This example shows how to use FDFI with tree-based models like Random Forests.
+This example shows how to use dfi with tree-based models like Random Forests.
 Note: This is a template. Full implementation coming soon.
 """
 
 import numpy as np
-from fdfi.explainers import TreeExplainer
+from dfi.explainers import TreeExplainer
 
 
 def main():
@@ -16,7 +16,7 @@ def main():
     X_train = np.random.randn(100, 10)
     y_train = (X_train[:, 0] + 2 * X_train[:, 1] > 0).astype(int)
     
-    print("FDFI Tree Model Example")
+    print("dfi Tree Model Example")
     print("=" * 50)
     print(f"Training data shape: {X_train.shape}")
     print("\nNote: This is a template example.")
@@ -27,7 +27,7 @@ def main():
     print("\nExample code structure:")
     print("```python")
     print("from sklearn.ensemble import RandomForestClassifier")
-    print("from fdfi.explainers import TreeExplainer")
+    print("from dfi.explainers import TreeExplainer")
     print("")
     print("# Train model")
     print("model = RandomForestClassifier()")

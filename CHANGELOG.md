@@ -11,7 +11,7 @@
 
 ### Changed
 - EOT/OT explainers now cache results for post-hoc CI computation via `conf_int`.
-- Exp3 example now uses `conf_int` for CI bands and supports `FDFI_USE_EOT` toggle.
+- Exp3 example now uses `conf_int` for CI bands and supports `dfi_USE_EOT` toggle.
 - `environment.yml` now includes plotting + sklearn deps for running examples.
 - Removed legacy `setup.py` and `requirements*.txt` in favor of `pyproject.toml` extras.
 

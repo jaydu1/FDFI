@@ -1,4 +1,4 @@
-name: fdfi
+name: dfi
 channels:
   - conda-forge
 dependencies:

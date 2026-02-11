@@ -1,11 +1,11 @@
 """
-Basic Example: Using FDFI Explainers
+Basic Example: Using dfi Explainers
 
-This example demonstrates how to use FDFI explainers with a simple model.
+This example demonstrates how to use dfi explainers with a simple model.
 """
 
 import numpy as np
-from fdfi.explainers import Explainer
+from dfi.explainers import Explainer
 
 
 def main():
@@ -26,13 +26,13 @@ def main():
     # Create an explainer
     explainer = Explainer(model, data=X_train)
     
-    print("FDFI Basic Example")
+    print("dfi Basic Example")
     print("=" * 50)
     print(f"Training data shape: {X_train.shape}")
     print(f"Test data shape: {X_test.shape}")
     print(f"Model predictions: {model(X_test)}")
     print("\nNote: Full explainer implementations are coming soon!")
-    print("This starter code provides the structure for FDFI development.")
+    print("This starter code provides the structure for dfi development.")
     
     # When explainers are fully implemented, you would use:
     # shap_values = explainer(X_test)

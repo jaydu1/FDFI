@@ -1,10 +1,10 @@
 """
-Tests for FDFI explainers.
+Tests for dfi explainers.
 """
 
 import pytest
 import numpy as np
-from fdfi.explainers import (
+from dfi.explainers import (
     Explainer,
     TreeExplainer,
     LinearExplainer,

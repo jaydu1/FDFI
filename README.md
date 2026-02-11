@@ -1,4 +1,4 @@
-# FDFI - Flow-Disentangled Feature Importance
+# dfi - Flow-Disentangled Feature Importance
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
@@ -7,7 +7,7 @@ A Python library for computing feature importance using flow-disentangled method
 
 ## Overview
 
-FDFI (Flow-Disentangled Feature Importance) is a Python module that provides interpretable machine learning explanations through flow-disentangled feature importance methods. Similar to SHAP, FDFI helps you understand which features are driving your model's predictions.
+dfi (Flow-Disentangled Feature Importance) is a Python module that provides interpretable machine learning explanations through flow-disentangled feature importance methods. Similar to SHAP, dfi helps you understand which features are driving your model's predictions.
 
 ## Features
 
@@ -22,8 +22,8 @@ FDFI (Flow-Disentangled Feature Importance) is a Python module that provides int
 ### From Source
 
 ```bash
-git clone https://github.com/jaydu1/FDFI.git
-cd FDFI
+git clone https://github.com/jaydu1/dfi.git
+cd dfi
 pip install -e .
 ```
 
@@ -41,7 +41,7 @@ pip install -e ".[flow]"
 
 ```python
 import numpy as np
-from fdfi.explainers import OTExplainer
+from dfi.explainers import OTExplainer
 
 # Define your model
 def model(X):
@@ -67,7 +67,7 @@ ci = explainer.conf_int(alpha=0.05, target="X", alternative="two-sided")
 Gaussian/empirical targets:
 
 ```python
-from fdfi.explainers import EOTExplainer
+from dfi.explainers import EOTExplainer
 
 explainer = EOTExplainer(
     model.predict,
@@ -83,8 +83,8 @@ results = explainer(X_test)
 ## Project Structure
 
 ```
-FDFI/
-├── fdfi/                  # Main package directory
+dfi/
+├── dfi/                  # Main package directory
 │   ├── __init__.py       # Package initialization
 │   ├── explainers.py     # Explainer classes
 │   ├── plots.py          # Visualization functions
@@ -105,7 +105,7 @@ FDFI/
 
 ## Development Status
 
-🚧 **This is starter code for FDFI development.** The core structure and API are in place, but full implementations are coming soon.
+🚧 **This is starter code for dfi development.** The core structure and API are in place, but full implementations are coming soon.
 
 Current status:
 - ✅ Package structure established
@@ -127,7 +127,7 @@ pip install -e ".[dev]"
 pytest
 
 # Run tests with coverage
-pytest --cov=fdfi --cov-report=html
+pytest --cov=dfi --cov-report=html
 ```
 
 ## Examples
@@ -155,23 +155,23 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## References
 
-FDFI is inspired by:
+dfi is inspired by:
 - [SHAP](https://github.com/slundberg/shap): A game theoretic approach to explain machine learning models
 - Flow-disentangled feature importance methodology
 
 ## Citation
 
-If you use FDFI in your research, please cite:
+If you use dfi in your research, please cite:
 
 ```bibtex
-@software{fdfi2024,
-  title={FDFI: Flow-Disentangled Feature Importance},
-  author={FDFI Team},
+@software{dfi2024,
+  title={dfi: Flow-Disentangled Feature Importance},
+  author={dfi Team},
   year={2024},
-  url={https://github.com/jaydu1/FDFI}
+  url={https://github.com/jaydu1/dfi}
 }
 ```
 
 ## Contact
 
-For questions and issues, please use the [GitHub issue tracker](https://github.com/jaydu1/FDFI/issues).
+For questions and issues, please use the [GitHub issue tracker](https://github.com/jaydu1/dfi/issues).

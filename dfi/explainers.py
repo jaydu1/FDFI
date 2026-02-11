@@ -1,5 +1,5 @@
 """
-Explainer classes for FDFI.
+Explainer classes for dfi.
 
 This module contains the main explainer classes for computing
 flow-disentangled feature importance.
@@ -15,7 +15,7 @@ from .utils import TwoComponentMixture, detect_feature_types, gower_cost_matrix
 
 class Explainer:
     """
-    Base class for FDFI explainers.
+    Base class for dfi explainers.
     
     This class provides the interface for computing feature importance
     using flow-disentangled methods, similar to SHAP explainers.
@@ -42,7 +42,7 @@ class Explainer:
     Examples
     --------
     >>> import numpy as np
-    >>> from fdfi import Explainer
+    >>> from dfi import Explainer
     >>> 
     >>> # Define a simple model
     >>> def model(x):
@@ -842,3 +842,229 @@ class EOTExplainer(Explainer):
 
 
 DFIExplainer = OTExplainer
+
+class FlowExplainer(Explainer):
+    """
+    Flow Matching DFI explainer using non-linear generative flow.
+
+    This explainer uses a learned flow model to transform X to disentangled latent Z.
+    Unlike OTExplainer which uses a constant Gaussian mapping, FlowExplainer computes
+    sample-specific Jacobian matrices for mapping importance back to original space.
+    """
+
+    def __init__(
+        self,
+        model: Callable[[np.ndarray], np.ndarray],
+        data: np.ndarray,
+        nsamples: int = 50,
+        sampling_method: str = "resample",
+        random_state: int = 0,
+        **kwargs: Any
+    ):
+        """Initialize the FlowExplainer.
+        
+        Parameters
+        ----------
+        model : callable
+            The model to explain.
+        data : np.ndarray
+            Background/training data for flow model training.
+        nsamples : int
+            Number of samples for conditional prediction in latent space.
+        sampling_method : str
+            Method for sampling in latent space ("resample", "permutation", "normal").
+        random_state : int
+            Random seed for reproducibility.
+        **kwargs : dict
+            Additional arguments including num_steps for flow training.
+        """
+        super().__init__(model, data, fit_flow=True, **kwargs)
+        self.nsamples = nsamples
+        self.sampling_method = sampling_method
+        self.random_state = random_state
+        
+        # Store background data in latent space for future sampling
+        Z_full = self.flow_engine.sample_batch(data, t_span=(1, 0))
+        # Convert from torch tensor to numpy if needed
+        if hasattr(Z_full, 'detach'):
+            Z_full = Z_full.detach().numpy()
+        self.Z_full = Z_full
+        
+        # Compute diagnostics: latent independence and distribution fidelity
+        self._compute_flow_diagnostics(data, Z_full)
+
+    def __call__(self, X: np.ndarray, **kwargs: Any) -> dict:
+        """Compute flow-disentangled feature importance.
+        
+        Parameters
+        ----------
+        X : np.ndarray
+            Input data to explain. Shape (n_samples, n_features).
+        
+        Returns
+        -------
+        dict
+            Dictionary with keys:
+            - "phi_X": Mean importance in original space
+            - "std_X": Std dev of importance in original space
+            - "se_X": Standard error in original space
+            - "phi_Z": Mean importance in latent space
+            - "std_Z": Std dev in latent space
+            - "se_Z": Standard error in latent space
+        """
+        n, d = X.shape
+        
+        # Step 1: Encode X to latent Z
+        Z = self.flow_engine.sample_batch(X, t_span=(1, 0))
+        # Convert from torch tensor to numpy if needed
+        if hasattr(Z, 'detach'):
+            Z = Z.detach().numpy()
+        
+        # Step 2: Get predictions on original X
+        y_pred = self.model(X)
+        
+        # Step 3: Compute per-sample UEIFs in latent space
+        ueifs_Z = self._phi_Z(Z, y_pred)
+        
+        # Step 4: Compute sample-specific Jacobian mappings
+        # For each sample, H_i = (dX/dZ_i)^2 (element-wise square of Jacobian)
+        ueifs_X = np.zeros_like(ueifs_Z)
+        for i in range(n):
+            H_i = self.flow_engine.Jacobi_N(Z[i:i+1], t_span=(0, 1)) ** 2  # (1, d, d)
+            # Convert from torch tensor to numpy if needed
+            if hasattr(H_i, 'detach'):
+                H_i = H_i.detach().numpy()
+            H_i = H_i[0]  # Remove batch dimension: (d, d)
+            # Map latent importance to original space
+            ueifs_X[i, :] = ueifs_Z[i, :] @ H_i.T
+        
+        # Step 5: Aggregate across samples
+        ddof = 1 if n > 1 else 0
+        
+        phi_X = np.mean(ueifs_X, axis=0)
+        std_X = np.std(ueifs_X, axis=0)
+        se_X = np.std(ueifs_X, axis=0, ddof=ddof) / np.sqrt(n)
+        
+        phi_Z = np.mean(ueifs_Z, axis=0)
+        std_Z = np.std(ueifs_Z, axis=0)
+        se_Z = np.std(ueifs_Z, axis=0, ddof=ddof) / np.sqrt(n)
+        
+        results = {
+            "phi_X": phi_X,
+            "std_X": std_X,
+            "se_X": se_X,
+            "phi_Z": phi_Z,
+            "std_Z": std_Z,
+            "se_Z": se_Z,
+        }
+        self._cache_results(results, n)
+        return results
+
+    def _phi_Z(self, Z: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+        """Compute per-sample UEIFs in latent space.
+        
+        Parameters
+        ----------
+        Z : np.ndarray
+            Latent representations. Shape (n_samples, n_features).
+        y_pred : np.ndarray
+            Model predictions on original X. Shape (n_samples,).
+        
+        Returns
+        -------
+        np.ndarray
+            Per-sample UEIFs in latent space. Shape (n_samples, n_features).
+        """
+        n, d = Z.shape
+        ueifs_Z = np.zeros((n, d))
+        
+        for j in range(d):
+            rng = np.random.default_rng(self.random_state + j)
+            
+            # Create perturbed latent samples by resampling feature j
+            # Z_tilde: (nsamples, n, d)
+            Z_tilde = np.tile(Z[None, :, :], (self.nsamples, 1, 1))
+            
+            if self.sampling_method == "resample":
+                # Resample j-th dimension from background distribution
+                resample_idx = rng.choice(
+                    self.Z_full.shape[0], size=(self.nsamples, n), replace=True
+                )
+                Z_tilde[:, :, j] = self.Z_full[resample_idx, j]
+            elif self.sampling_method == "permutation":
+                # Randomly permute j-th dimension
+                perm_idx = np.array([rng.permutation(n) for _ in range(self.nsamples)])
+                Z_tilde[:, :, j] = Z[perm_idx, j]
+            elif self.sampling_method == "normal":
+                # Sample from standard normal
+                Z_tilde[:, :, j] = rng.normal(0.0, 1.0, size=(self.nsamples, n))
+            else:
+                raise ValueError(f"Unknown sampling_method: {self.sampling_method}")
+            
+            # Flatten for batch processing
+            Z_tilde_flat = Z_tilde.reshape(-1, d)
+            
+            # Decode perturbed latent samples back to original space
+            X_tilde_flat = self.flow_engine.sample_batch(Z_tilde_flat, t_span=(0, 1))
+            # Convert from torch tensor to numpy if needed
+            if hasattr(X_tilde_flat, 'detach'):
+                X_tilde_flat = X_tilde_flat.detach().numpy()
+            
+            # Get predictions and average across nsamples
+            y_tilde_flat = self.model(X_tilde_flat)
+            y_tilde = y_tilde_flat.reshape(self.nsamples, n).mean(axis=0)
+            
+            # Compute UEIF for feature j
+            ueifs_Z[:, j] = (y_pred - y_tilde) ** 2
+        
+        return ueifs_Z
+
+    def _compute_flow_diagnostics(self, X_orig: np.ndarray, Z_full: np.ndarray) -> None:
+        """
+        Compute and report flow model diagnostics.
+        
+        Evaluates:
+        1. Latent Independence: Median Distance Correlation of latent dimensions
+        2. Distribution Fidelity: MMD between original and reconstructed data
+        
+        Parameters
+        ----------
+        X_orig : np.ndarray
+            Original background data.
+        Z_full : np.ndarray
+            Latent encodings of background data (already numpy).
+        """
+        from . import utils
+        
+        # Determine subset size for large datasets
+        n_samples = X_orig.shape[0]
+        subset_size = min(n_samples, 1000) if n_samples > 1000 else None
+        
+        # 1. Compute latent independence
+        dcor_matrix, median_dcor = utils.compute_latent_independence(Z_full, subset_size=subset_size)
+        
+        # 2. Reconstruct data from latent space
+        X_hat = self.flow_engine.sample_batch(Z_full, t_span=(0, 1))
+        # Convert from torch tensor to numpy if needed
+        if hasattr(X_hat, 'detach'):
+            X_hat = X_hat.detach().numpy()
+        
+        # 3. Compute distribution fidelity (MMD)
+        mmd_score = utils.compute_mmd(X_orig, X_hat, subset_size=subset_size)
+        
+        # Store diagnostics
+        self.diagnostics = {
+            "latent_independence_dcor": dcor_matrix,
+            "latent_independence_median": median_dcor,
+            "distribution_fidelity_mmd": mmd_score,
+        }
+        
+        # Print professional diagnostic report
+        print("\n" + "=" * 50)
+        print("--- Flow Model Diagnostics ---")
+        print("=" * 50)
+        print(f"Latent Independence (Median dCor):  {median_dcor:.6f}")
+        print(f"  → Lower values (~0) indicate higher independence")
+        print(f"Distribution Fidelity (MMD):       {mmd_score:.6f}")
+        print(f"  → Lower values (~0) indicate better fidelity")
+        print("=" * 50 + "\n")

@@ -1,4 +1,4 @@
-# Getting Started with FDFI
+# Getting Started with dfi
 
 ## Installation
 
@@ -11,7 +11,7 @@ pip install -e .
 ### 1. Create an Explainer
 
 ```python
-from fdfi.explainers import Explainer
+from dfi.explainers import Explainer
 
 def my_model(X):
     # Your model's prediction function
@@ -32,7 +32,7 @@ X_test = np.random.randn(10, 5)  # Test data
 ### 3. Visualize Results
 
 ```python
-from fdfi.plots import summary_plot
+from dfi.plots import summary_plot
 
 # summary_plot(shap_values, X_test)  # Coming soon!
 ```
@@ -44,7 +44,7 @@ from fdfi.plots import summary_plot
 For tree-based models (Random Forest, XGBoost, LightGBM):
 
 ```python
-from fdfi.explainers import TreeExplainer
+from dfi.explainers import TreeExplainer
 from sklearn.ensemble import RandomForestClassifier
 
 model = RandomForestClassifier()
@@ -58,7 +58,7 @@ explainer = TreeExplainer(model)
 For linear models:
 
 ```python
-from fdfi.explainers import LinearExplainer
+from dfi.explainers import LinearExplainer
 from sklearn.linear_model import LogisticRegression
 
 model = LogisticRegression()
@@ -72,7 +72,7 @@ explainer = LinearExplainer(model)
 Model-agnostic explainer (works with any model):
 
 ```python
-from fdfi.explainers import KernelExplainer
+from dfi.explainers import KernelExplainer
 
 explainer = KernelExplainer(model.predict, X_background)
 ```
@@ -82,7 +82,7 @@ explainer = KernelExplainer(model.predict, X_background)
 Gaussian optimal-transport DFI (no cross-fitting):
 
 ```python
-from fdfi.explainers import OTExplainer
+from dfi.explainers import OTExplainer
 
 explainer = OTExplainer(model.predict, X_background, nsamples=50)
 results = explainer(X_test)
@@ -93,7 +93,7 @@ results = explainer(X_test)
 Entropic OT DFI using a learned transport kernel:
 
 ```python
-from fdfi.explainers import EOTExplainer
+from dfi.explainers import EOTExplainer
 
 explainer = EOTExplainer(model.predict, X_background, epsilon=0.1, nsamples=50)
 results = explainer(X_test)

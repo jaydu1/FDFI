@@ -1,18 +1,18 @@
-# FDFI Documentation
+# dfi Documentation
 
-Welcome to the FDFI (Flow-Disentangled Feature Importance) documentation.
+Welcome to the dfi (Flow-Disentangled Feature Importance) documentation.
 
 ## Overview
 
-FDFI is a Python library for computing feature importance using flow-disentangled methods, inspired by SHAP (SHapley Additive exPlanations).
+dfi is a Python library for computing feature importance using flow-disentangled methods, inspired by SHAP (SHapley Additive exPlanations).
 
 ## Installation
 
 ### From Source
 
 ```bash
-git clone https://github.com/jaydu1/FDFI.git
-cd FDFI
+git clone https://github.com/jaydu1/dfi.git
+cd dfi
 pip install -e .
 ```
 
@@ -30,7 +30,7 @@ pip install -e ".[flow]"
 
 ```python
 import numpy as np
-from fdfi.explainers import Explainer
+from dfi.explainers import Explainer
 
 # Define your model
 def model(X):
@@ -118,11 +118,11 @@ MIT License - see LICENSE file for details.
 
 ## References
 
-FDFI is inspired by:
+dfi is inspired by:
 - SHAP: https://github.com/slundberg/shap
 - Flow-disentangled feature importance methodology
 
 ## Contact
 
 For questions and issues, please use the GitHub issue tracker:
-https://github.com/jaydu1/FDFI/issues
+https://github.com/jaydu1/dfi/issues

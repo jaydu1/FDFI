@@ -1,10 +1,10 @@
 """
-Tests for FDFI utility functions.
+Tests for dfi utility functions.
 """
 
 import pytest
 import numpy as np
-from fdfi.utils import (
+from dfi.utils import (
     validate_input,
     sample_background,
     get_feature_names,

@@ -189,7 +189,11 @@ class FlowMatchingModel:
         if isinstance(y0, torch.Tensor):
             y0 = y0.detach().cpu().numpy()
 
-        x0 = torch.tensor(y0[:self.dim], dtype=torch.float32, device=self.device)
+        # Handle both (d,) and (1, d) input shapes
+        if y0.ndim == 2:
+            y0 = y0[0]  # Extract single sample
+        
+        x0 = torch.tensor(y0, dtype=torch.float32, device=self.device)
         J0 = torch.eye(self.dim, dtype=torch.float32, device=self.device).flatten()
         y0_torch = torch.cat([x0, J0])  
 

@@ -1,4 +1,4 @@
-# Makefile for FDFI development tasks
+# Makefile for dfi development tasks
 
 .PHONY: help install install-dev test lint format clean build
 
@@ -22,15 +22,15 @@ test:
 	pytest -v
 
 test-cov:
-	pytest --cov=fdfi --cov-report=html --cov-report=term
+	pytest --cov=dfi --cov-report=html --cov-report=term
 
 lint:
-	flake8 fdfi tests examples
-	mypy fdfi
+	flake8 dfi tests examples
+	mypy dfi
 
 format:
-	black fdfi tests examples
-	isort fdfi tests examples
+	black dfi tests examples
+	isort dfi tests examples
 
 clean:
 	rm -rf build/

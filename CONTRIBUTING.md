@@ -1,14 +1,14 @@
-# Contributing to FDFI
+# Contributing to dfi
 
-Thank you for your interest in contributing to FDFI!
+Thank you for your interest in contributing to dfi!
 
 ## Development Setup
 
 1. Fork the repository
 2. Clone your fork:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/FDFI.git
-   cd FDFI
+   git clone https://github.com/YOUR_USERNAME/dfi.git
+   cd dfi
    ```
 3. Install development dependencies:
    ```bash

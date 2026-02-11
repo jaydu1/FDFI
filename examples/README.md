@@ -1,18 +1,18 @@
-# FDFI Examples
+# dfi Examples
 
-This directory contains example scripts demonstrating how to use FDFI.
+This directory contains example scripts demonstrating how to use dfi.
 
 ## Available Examples
 
 ### basic_example.py
-Basic usage of FDFI explainers with a simple linear model.
+Basic usage of dfi explainers with a simple linear model.
 
 ```bash
 python basic_example.py
 ```
 
 ### tree_example.py
-Template for using FDFI with tree-based models (Random Forests, XGBoost, etc.).
+Template for using dfi with tree-based models (Random Forests, XGBoost, etc.).
 
 ```bash
 python tree_example.py
@@ -20,7 +20,7 @@ python tree_example.py
 
 ## Running Examples
 
-Make sure FDFI is installed before running examples:
+Make sure dfi is installed before running examples:
 
 ```bash
 # Install in development mode

@@ -2,7 +2,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestRegressor
-from fdfi.explainers import OTExplainer, EOTExplainer
+from dfi.explainers import OTExplainer, EOTExplainer
 
 
 def generate_exp3_data(n=1000, rho=0.8, seed=42):
@@ -23,7 +23,7 @@ def generate_exp3_data(n=1000, rho=0.8, seed=42):
     return X, y
 
 
-USE_EOT = os.getenv("FDFI_USE_EOT", "0").lower() in ("1", "true", "yes")
+USE_EOT = os.getenv("dfi_USE_EOT", "0").lower() in ("1", "true", "yes")
 
 CI_ALPHA = 0.05
 CI_TARGET = "X"
@@ -33,7 +33,7 @@ CI_VAR_FLOOR_C = 0.0
 CI_MARGIN_METHOD = "fixed"  # or "mixture"
 
 # Use default EOT settings via:
-# FDFI_USE_EOT=1 python examples/verify_exp3.py
+# dfi_USE_EOT=1 python examples/verify_exp3.py
 
 print("Step 1: Generating Exp3 simulation data...")
 X_train, y_train = generate_exp3_data(n=2000, rho=0.8, seed=1)
