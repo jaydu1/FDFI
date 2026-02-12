@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dfi"
 version = "0.0.1"
-description = "Flow-Disentangled Feature Importance"
+description = "Disentangled Feature Importance"
 readme = "README.md"
 authors = [
     {name = "dfi Team"}

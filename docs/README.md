@@ -118,9 +118,13 @@ MIT License - see LICENSE file for details.
 
 ## References
 
+<<<<<<< HEAD
 dfi is inspired by:
+=======
+DFI is inspired by:
+>>>>>>> 914762b723966c3192bac9ea445a716d8760dd38
 - SHAP: https://github.com/slundberg/shap
-- Flow-disentangled feature importance methodology
+- Disentangled feature importance methodology
 
 ## Contact
 

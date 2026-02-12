@@ -1,7 +1,8 @@
 """
 dfi: Flow-Disentangled Feature Importance
 
-A Python library for computing feature importance using flow-disentangled methods.
+A Python library for computing feature importance using disentangled methods.
+Includes both DFI (Disentangled Feature Importance) and FDFI (Flow-DFI) methods.
 """
 
 __version__ = "0.0.1"

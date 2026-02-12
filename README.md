@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 
-A Python library for computing feature importance using flow-disentangled methods, inspired by SHAP.
+A Python library for computing feature importance using disentangled methods, inspired by SHAP.
 
 ## Overview
 
@@ -157,7 +157,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 dfi is inspired by:
 - [SHAP](https://github.com/slundberg/shap): A game theoretic approach to explain machine learning models
-- Flow-disentangled feature importance methodology
 
 ## Citation
 
@@ -169,6 +168,20 @@ If you use dfi in your research, please cite:
   author={dfi Team},
   year={2024},
   url={https://github.com/jaydu1/dfi}
+}
+
+@article{du2025disentangled,
+  title={Disentangled Feature Importance},
+  author={Du, Jin-Hong and Roeder, Kathryn and Wasserman, Larry},
+  journal={arXiv preprint arXiv:2507.00260},
+  year={2025}
+}
+
+@inproceedings{chen2026flow,
+  title={Flow-Disentangled Feature Importance},
+  author={Chen, Xin and Guo, Yifan and Du, Jin-Hong},
+  booktitle={The Thirteenth International Conference on Learning Representations},
+  year={2026}
 }
 ```
 

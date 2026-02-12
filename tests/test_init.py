@@ -1,5 +1,8 @@
 """
+<<<<<<< HEAD
 Tests for dfi package initialization.
+=======
+
 """
 
 import dfi

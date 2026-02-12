@@ -2,11 +2,23 @@ name: dfi
 channels:
   - conda-forge
 dependencies:
+  # ===== Core FDFI dependencies =====
   - python=3.10
   - numpy>=1.20.0
   - scipy>=1.7.0
   - matplotlib>=3.5.0
   - scikit-learn>=1.0.0
+  
+  # ===== Development/Testing =====
   - pytest>=7.0.0
   - pytest-cov>=4.0.0
+  
+  # ===== Documentation (ReadTheDocs) =====
+  - sphinx>=5.0.0
+  - sphinx_rtd_theme>=1.2.0
+  - myst-parser>=1.0.0
+  - nbsphinx>=0.9.0
+  - pandoc>=2.9.2
+  - ipykernel>=6.0.0
+  
   - pip
