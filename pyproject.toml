@@ -47,6 +47,7 @@ dev = [
 flow = [
     "torch>=2.0.0",
     "torchdiffeq>=0.2.3",
+    "tqdm>=4.60.0",
 ]
 docs = [
     "sphinx>=5.0.0",
