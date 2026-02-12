@@ -1,9 +1,5 @@
 """
-<<<<<<< HEAD
 Utility functions for dfi.
-=======
-Utility functions for DFI.
->>>>>>> 914762b723966c3192bac9ea445a716d8760dd38
 
 This module provides helper functions used across the package.
 """
