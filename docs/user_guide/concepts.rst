@@ -68,6 +68,60 @@ DFI provides two main approaches:
 - Supports mixed data types (continuous + categorical)
 - Better for non-Gaussian or mixed-type data
 
+Flow-Disentangled Feature Importance (Flow-DFI)
+-----------------------------------------------
+
+**FlowExplainer** uses **normalizing flows** to learn a flexible, data-driven
+transformation between the original feature space X and a disentangled latent
+space Z where features are approximately independent.
+
+**CPI (Conditional Permutation Importance)**
+
+Averages predictions first, then computes squared difference:
+
+.. math::
+
+   \phi_{Z,j}^{CPI} = (Y - \mathbb{E}_b[f(\tilde{X}_b^{(j)})])^2
+
+where :math:`\tilde{X}_b^{(j)} = T^{-1}(\tilde{Z}_b^{(j)})` and 
+:math:`\tilde{Z}_b^{(j)}` has the j-th component replaced with sample b.
+
+**SCPI (Sobol-CPI)**
+
+Computes squared differences first for each Monte Carlo sample, then averages:
+
+.. math::
+
+   \phi_{Z,j}^{SCPI} = \mathbb{E}_b[(Y - f(\tilde{X}_b^{(j)}))^2]
+
+This is equivalent to the Sobol sensitivity index formulation. The key 
+difference from CPI is the **order of averaging**.
+
+**Jacobian Transformation to X-space**
+
+Both CPI and SCPI compute importance in the disentangled Z-space. To attribute
+importance to the original features :math:`X_l`, we use the **Jacobian** of the
+decoder transformation :math:`T^{-1}: Z \to X`:
+
+.. math::
+
+   \phi_{X,l} = \sum_{k=1}^{d} H_{lk}^2 \cdot \phi_{Z,k}
+
+where :math:`H = \frac{\partial X}{\partial Z}` is the Jacobian matrix evaluated
+at the data points. This correctly accounts for how changes in each latent 
+dimension Z_k affect each original feature X_l.
+
+For linear transformations (as in OTExplainer), this reduces to :math:`\phi_X = H^T H \phi_Z`
+where :math:`H = L` is the Cholesky factor. For normalizing flows, the Jacobian
+varies with position and is computed via automatic differentiation.
+
+**When to Use FlowExplainer**
+
+- Complex non-linear dependencies between features
+- Non-Gaussian data distributions  
+- When OT assumptions are too restrictive
+- When you have sufficient data (>500 samples) to train the flow
+
 Relationship to Other Methods
 -----------------------------
 

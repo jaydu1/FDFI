@@ -96,16 +96,16 @@ Requirements
 Verifying Installation
 ----------------------
 
-After installation, verify that DFI is working:
+After installation, verify that FDFI is working:
 
 .. code-block:: python
 
-   import dfi
-   print(dfi.__version__)
+   import fdfi
+   print(fdfi.__version__)
 
    # Test basic functionality
    import numpy as np
-   from dfi.explainers import OTExplainer
+   from fdfi.explainers import OTExplainer
 
    def model(X):
        return X.sum(axis=1)

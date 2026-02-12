@@ -10,6 +10,7 @@ is a Jupyter notebook that you can run interactively.
    quickstart
    ot_explainer
    eot_explainer
+   flow_explainer
    confidence_intervals
 
 Getting Started
@@ -32,6 +33,10 @@ Tutorial Overview
 :doc:`eot_explainer`
    Master entropic optimal transport for non-Gaussian data. Covers adaptive 
    epsilon, stochastic transport, and mixed data types.
+
+:doc:`flow_explainer`
+   Master Flow-DFI with normalizing flows. Learn about CPI vs SCPI methods,
+   custom flow models, and when to choose FlowExplainer over OT methods.
 
 :doc:`confidence_intervals`
    Statistical inference with FDFI. Learn to compute confidence intervals, 

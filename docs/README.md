@@ -1,128 +1,27 @@
+---
+orphan: true
+---
+
 # DFI Documentation
 
-Welcome to the DFI (Disentangled Feature Importance) documentation.
+This is the documentation source for DFI (Disentangled Feature Importance).
 
-## Overview
-
-DFI is a Python library for computing feature importance using disentangled methods based on optimal transport, inspired by SHAP (SHapley Additive exPlanations).
-
-## Installation
-
-### From Source
+For the full documentation, see the main README in the project root or build the docs:
 
 ```bash
-git clone https://github.com/jaydu1/FDFI.git
-cd FDFI
-pip install -e .
+cd docs
+python -m sphinx -b html . _build/html
+open _build/html/index.html
 ```
 
-### Dependencies
+## Documentation Structure
 
-Install extras via `pyproject.toml`:
+- **User Guide**: Core concepts, choosing explainers, installation
+- **Tutorials**: Jupyter notebooks with worked examples
+- **API Reference**: Full API documentation
 
-```bash
-pip install -e ".[dev]"
-pip install -e ".[plots]"
-pip install -e ".[flow]"
-```
+## Quick Links
 
-## Quick Start
-
-```python
-import numpy as np
-from dfi.explainers import Explainer
-
-# Define your model
-def model(X):
-    return X.sum(axis=1)
-
-# Create background data
-X_background = np.random.randn(100, 10)
-
-# Create an explainer
-explainer = Explainer(model, data=X_background)
-
-# Explain test instances
-X_test = np.random.randn(10, 10)
-# shap_values = explainer(X_test)  # Coming soon!
-```
-
-## API Reference
-
-### Explainers
-
-- `Explainer`: Base class for all explainers
-- `TreeExplainer`: Optimized for tree-based models
-- `LinearExplainer`: Optimized for linear models
-- `KernelExplainer`: Model-agnostic explainer
-- `OTExplainer`: Gaussian optimal-transport DFI (no cross-fitting)
-- `EOTExplainer`: Entropic optimal-transport DFI (no cross-fitting)
-
-### Confidence Intervals
-
-All explainers return point estimates and can compute CIs post-hoc:
-
-```python
-results = explainer(X_test)
-ci = explainer.conf_int(alpha=0.05, target="X", alternative="two-sided")
-```
-
-`conf_int` supports variance floors and practical margins:
-```python
-ci = explainer.conf_int(
-    alpha=0.05,
-    var_floor_method="fixed",
-    var_floor_c=0.1,
-    margin_method="mixture",
-    alternative="two-sided",
-)
-```
-
-### EOT Options
-
-`EOTExplainer` supports adaptive epsilon, stochastic transport, and target choices:
-
-```python
-explainer = EOTExplainer(
-    model.predict,
-    X_background,
-    auto_epsilon=True,
-    stochastic_transport=True,
-    n_transport_samples=10,
-    target="gaussian",  # or "empirical"
-)
-```
-
-### Plotting Functions
-
-- `summary_plot`: Visualize feature importance across samples
-- `waterfall_plot`: Show feature contributions for a single prediction
-- `force_plot`: Interactive visualization of feature effects
-- `dependence_plot`: Show feature value vs. importance relationship
-
-### Utilities
-
-- `validate_input`: Input validation and conversion
-- `sample_background`: Sample background data
-- `get_feature_names`: Generate or validate feature names
-- `convert_to_link`: Apply link functions to predictions
-- `check_additivity`: Verify SHAP additivity property
-
-## Contributing
-
-Contributions are welcome! Please see the repository for contribution guidelines.
-
-## License
-
-MIT License - see LICENSE file for details.
-
-## References
-
-DFI is inspired by:
-- SHAP: https://github.com/slundberg/shap
-- Disentangled feature importance methodology
-
-## Contact
-
-For questions and issues, please use the GitHub issue tracker:
-https://github.com/jaydu1/FDFI/issues
+- [Concepts](user_guide/concepts.rst): Theory behind DFI and Flow-DFI
+- [Choosing an Explainer](user_guide/choosing_explainer.rst): Which explainer to use
+- [Tutorials](tutorials/index.rst): Hands-on notebooks

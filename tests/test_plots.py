@@ -4,7 +4,7 @@ Tests for FDFI plotting functions.
 
 import pytest
 import numpy as np
-from dfi.plots import (
+from fdfi.plots import (
     summary_plot,
     waterfall_plot,
     force_plot,

@@ -28,7 +28,7 @@ Quick Example
 .. code-block:: python
 
    import numpy as np
-   from dfi.explainers import OTExplainer
+   from fdfi.explainers import OTExplainer
 
    # Define your model
    def model(X):
