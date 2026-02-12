@@ -4,7 +4,7 @@ Plotting Functions
 Overview
 --------
 
-The ``dfi.plots`` module provides visualization functions for feature 
+The ``fdfi.plots`` module provides visualization functions for feature 
 importance, similar to SHAP's plotting capabilities. These functions help 
 you understand and communicate model explanations.
 
@@ -19,7 +19,7 @@ you understand and communicate model explanations.
 Summary Plot
 ------------
 
-.. autofunction:: dfi.plots.summary_plot
+.. autofunction:: fdfi.plots.summary_plot
 
 The summary plot shows the distribution of feature importance values across 
 all samples, with features ordered by their overall importance.
@@ -28,7 +28,7 @@ all samples, with features ordered by their overall importance.
 
 .. code-block:: python
 
-   from dfi.plots import summary_plot
+   from fdfi.plots import summary_plot
 
    # After computing explanations
    results = explainer(X_test)
@@ -39,7 +39,7 @@ all samples, with features ordered by their overall importance.
 Waterfall Plot
 --------------
 
-.. autofunction:: dfi.plots.waterfall_plot
+.. autofunction:: fdfi.plots.waterfall_plot
 
 The waterfall plot shows how each feature contributes to pushing the 
 prediction from the base value for a single sample.
@@ -48,7 +48,7 @@ prediction from the base value for a single sample.
 
 .. code-block:: python
 
-   from dfi.plots import waterfall_plot
+   from fdfi.plots import waterfall_plot
 
    # Explain a single prediction
    waterfall_plot(
@@ -60,7 +60,7 @@ prediction from the base value for a single sample.
 Force Plot
 ----------
 
-.. autofunction:: dfi.plots.force_plot
+.. autofunction:: fdfi.plots.force_plot
 
 The force plot is an interactive visualization showing feature contributions 
 as forces pushing the prediction higher or lower.
@@ -69,7 +69,7 @@ as forces pushing the prediction higher or lower.
 
 .. code-block:: python
 
-   from dfi.plots import force_plot
+   from fdfi.plots import force_plot
 
    force_plot(
        base_value=0.5,
@@ -80,7 +80,7 @@ as forces pushing the prediction higher or lower.
 Dependence Plot
 ---------------
 
-.. autofunction:: dfi.plots.dependence_plot
+.. autofunction:: fdfi.plots.dependence_plot
 
 The dependence plot shows the relationship between a feature's value and 
 its contribution to the model output, optionally colored by another feature 
@@ -90,7 +90,7 @@ to show interaction effects.
 
 .. code-block:: python
 
-   from dfi.plots import dependence_plot
+   from fdfi.plots import dependence_plot
 
    # Show dependence for feature 0
    dependence_plot(

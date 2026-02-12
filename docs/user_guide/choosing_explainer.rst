@@ -20,6 +20,9 @@ Quick Decision Guide
    * - Non-Gaussian data
      - ``EOTExplainer``
      - Adaptive epsilon, more flexible
+   * - Complex multimodal data
+     - ``FlowExplainer``
+     - Learns data distribution via normalizing flow
    * - Mixed data types
      - ``EOTExplainer`` with Gower
      - Use ``cost_metric="gower"``
@@ -53,7 +56,7 @@ OTExplainer (Gaussian OT)
 
 .. code-block:: python
 
-   from dfi.explainers import OTExplainer
+   from fdfi.explainers import OTExplainer
 
    explainer = OTExplainer(
        model.predict,
@@ -84,7 +87,7 @@ EOTExplainer (Entropic OT)
 
 .. code-block:: python
 
-   from dfi.explainers import EOTExplainer
+   from fdfi.explainers import EOTExplainer
 
    explainer = EOTExplainer(
        model.predict,
@@ -104,6 +107,81 @@ EOTExplainer (Entropic OT)
        cost_metric="sqeuclidean",  # or "gower", "auto"
    )
 
+FlowExplainer (Flow-Based DFI)
+------------------------------
+
+**Best for:** Complex, non-Gaussian data where normalizing flows can capture the
+underlying distribution structure
+
+**Pros:**
+
+- Handles complex, multimodal distributions
+- Maps data to Gaussian latent space via learned normalizing flow
+- Supports both CPI and SCPI (Sobol-CPI) methods with different averaging orders
+- Flexible flow training and pre-trained model support
+
+**Cons:**
+
+- Requires PyTorch and torchdiffeq dependencies
+- Flow training can be slow for large datasets
+
+**Key options:**
+
+.. code-block:: python
+
+   from fdfi.explainers import FlowExplainer
+
+   explainer = FlowExplainer(
+       model.predict,
+       data=X_background,
+       
+       # Flow fitting
+       fit_flow=True,          # Fit flow during init (or fit later)
+       num_steps=200,          # Flow training iterations
+       
+       # Method selection
+       method='cpi',           # 'cpi', 'scpi', or 'both'
+       
+       # Counterfactual sampling
+       nsamples=50,            # Monte Carlo samples per feature
+       sampling_method='resample',  # 'resample', 'permutation', 'normal', 'condperm'
+       
+       # Reproducibility
+       random_state=42,
+   )
+   
+   results = explainer(X_test)
+
+**Understanding CPI vs SCPI:**
+
+- **CPI (Conditional Permutation Importance)**: Average predictions first, then 
+  compute squared difference:
+  
+  .. math::
+  
+     \phi_j^{CPI} = (Y - E_b[f(\tilde{X}_b^{(j)})])^2
+  
+- **SCPI (Sobol-CPI)**: Compute squared differences first, then average (Sobol
+  sensitivity index formulation):
+  
+  .. math::
+  
+     \phi_j^{SCPI} = E_b[(Y - f(\tilde{X}_b^{(j)}))^2]
+
+**External flow models:**
+
+.. code-block:: python
+
+   from fdfi.models import FlowMatchingModel
+
+   # Train flow externally with custom settings
+   flow = FlowMatchingModel(X_background, dim=X_background.shape[1])
+   flow.fit(num_steps=500, verbose='final')
+
+   # Use pre-trained flow in explainer
+   explainer = FlowExplainer(model.predict, X_background, fit_flow=False)
+   explainer.set_flow(flow)
+
 TreeExplainer
 -------------
 
@@ -119,7 +197,7 @@ LightGBM)
 
 .. code-block:: python
 
-   from dfi.explainers import TreeExplainer
+   from fdfi.explainers import TreeExplainer
    from sklearn.ensemble import RandomForestRegressor
 
    model = RandomForestRegressor().fit(X_train, y_train)
@@ -139,7 +217,7 @@ LinearExplainer
 
 .. code-block:: python
 
-   from dfi.explainers import LinearExplainer
+   from fdfi.explainers import LinearExplainer
    from sklearn.linear_model import LinearRegression
 
    model = LinearRegression().fit(X_train, y_train)
@@ -164,7 +242,7 @@ KernelExplainer
 
 .. code-block:: python
 
-   from dfi.explainers import KernelExplainer
+   from fdfi.explainers import KernelExplainer
 
    explainer = KernelExplainer(model.predict, data=X_background)
 

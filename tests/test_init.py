@@ -1,18 +1,18 @@
 """
-Tests for DFI package initialization.
+Tests for FDFI package initialization.
 """
 
-import dfi
+import fdfi
 
 
 def test_version():
     """Test that version is defined."""
-    assert hasattr(dfi, "__version__")
-    assert isinstance(dfi.__version__, str)
-    assert dfi.__version__ == "0.0.1"
+    assert hasattr(fdfi, "__version__")
+    assert isinstance(fdfi.__version__, str)
+    assert fdfi.__version__ == "0.0.1"
 
 
 def test_package_imports():
     """Test that package can be imported."""
     # Just check that the package imports without errors
-    assert dfi is not None
+    assert fdfi is not None

@@ -1,4 +1,4 @@
-# DFI - Disentangled Feature Importance
+# FDFI - Flow-Disentangled Feature Importance
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
@@ -7,12 +7,13 @@ A Python library for computing feature importance using disentangled methods, in
 
 ## Overview
 
-DFI (Disentangled Feature Importance) is a Python module that provides interpretable machine learning explanations through disentangled feature importance methods. This package implements both DFI (Disentangled Feature Importance) and FDFI (Flow-DFI) methods. Similar to SHAP, DFI helps you understand which features are driving your model's predictions.
+FDFI (Flow-Disentangled Feature Importance) is a Python module that provides interpretable machine learning explanations through disentangled feature importance methods. This package implements both DFI (Disentangled Feature Importance) and FDFI (Flow-DFI) methods. Similar to SHAP, FDFI helps you understand which features are driving your model's predictions.
 
 ## Features
 
 - 🎯 **Multiple Explainer Types**: Tree, Linear, and Kernel explainers for different model types
 - 🧭 **OT-Based DFI**: Gaussian OT (OTExplainer) and Entropic OT (EOTExplainer)
+- 🌊 **Flow-DFI**: FlowExplainer with CPI and SCPI methods for non-Gaussian data
 - 📊 **Rich Visualizations**: Summary, waterfall, force, and dependence plots
 - 🔧 **Easy to Use**: Simple API similar to SHAP
 - 🚀 **Extensible**: Built with modularity in mind for future enhancements
@@ -41,7 +42,7 @@ pip install -e ".[flow]"
 
 ```python
 import numpy as np
-from dfi.explainers import OTExplainer
+from fdfi.explainers import OTExplainer
 
 # Define your model
 def model(X):
@@ -67,7 +68,7 @@ ci = explainer.conf_int(alpha=0.05, target="X", alternative="two-sided")
 Gaussian/empirical targets:
 
 ```python
-from dfi.explainers import EOTExplainer
+from fdfi.explainers import EOTExplainer
 
 explainer = EOTExplainer(
     model.predict,
@@ -80,11 +81,54 @@ explainer = EOTExplainer(
 results = explainer(X_test)
 ```
 
+## Flow-DFI with FlowExplainer
+
+`FlowExplainer` uses normalizing flows for non-Gaussian data, supporting both CPI (Conditional Permutation Importance) and SCPI (Sobol-CPI):
+
+- **CPI**: Average predictions first, then squared difference: $(Y - E[f(\tilde{X})])^2$
+- **SCPI**: Squared differences first, then average: $E[(Y - f(\tilde{X}_b))^2]$
+
+```python
+from fdfi.explainers import FlowExplainer
+
+# Create explainer with CPI (default)
+explainer = FlowExplainer(
+    model.predict,
+    X_background,
+    fit_flow=True,
+    method='cpi',     # 'cpi', 'scpi', or 'both'
+    num_steps=200,    # flow training steps
+    nsamples=50,      # counterfactual samples
+    sampling_method='resample',  # 'resample', 'permutation', 'normal', 'condperm'
+)
+
+results = explainer(X_test)
+# results['phi_Z']: Z-space importance
+# results['phi_X']: same as phi_Z (Z-space methods)
+
+# Confidence intervals
+ci = explainer.conf_int(alpha=0.05, target="Z", alternative="two-sided")
+```
+
+For advanced users, flow models can be trained separately:
+
+```python
+from fdfi.models import FlowMatchingModel
+
+# Train flow model externally
+flow_model = FlowMatchingModel(X_background, dim=X_background.shape[1])
+flow_model.fit(num_steps=500, verbose='final')
+
+# Set pre-trained flow
+explainer = FlowExplainer(model.predict, X_background, fit_flow=False)
+explainer.set_flow(flow_model)
+```
+
 ## Project Structure
 
 ```
 FDFI/
-├── dfi/                   # Main package directory
+├── fdfi/                  # Main package directory
 │   ├── __init__.py       # Package initialization
 │   ├── explainers.py     # Explainer classes
 │   ├── plots.py          # Visualization functions
@@ -93,12 +137,8 @@ FDFI/
 │   ├── test_explainers.py
 │   ├── test_plots.py
 │   └── test_utils.py
-├── examples/              # Example scripts
-│   ├── basic_example.py
-│   └── tree_example.py
-├── docs/                  # Documentation
-│   ├── README.md
-│   └── getting_started.md
+├── docs/                  # Documentation & tutorials
+│   └── tutorials/        # Jupyter notebook tutorials
 ├── pyproject.toml        # Package configuration
 └── README.md            # This file
 ```
@@ -127,23 +167,17 @@ pip install -e ".[dev]"
 pytest
 
 # Run tests with coverage
-pytest --cov=dfi --cov-report=html
-```
-
-## Examples
-
-See the `examples/` directory for usage examples:
-
-```bash
-python examples/basic_example.py
-python examples/tree_example.py
+pytest --cov=fdfi --cov-report=html
 ```
 
 ## Documentation
 
-Full documentation is available in the `docs/` directory:
-- [Getting Started](docs/getting_started.md)
-- [API Reference](docs/README.md)
+Full documentation and tutorials are available in the `docs/` directory:
+- [Quickstart Tutorial](docs/tutorials/quickstart.ipynb)
+- [OT Explainer Tutorial](docs/tutorials/ot_explainer.ipynb)
+- [EOT Explainer Tutorial](docs/tutorials/eot_explainer.ipynb)
+- [Flow Explainer Tutorial](docs/tutorials/flow_explainer.ipynb)
+- [Confidence Intervals](docs/tutorials/confidence_intervals.ipynb)
 
 ## Contributing
 
@@ -168,7 +202,7 @@ If you use DFI in your research, please cite:
 
 ```bibtex
 @software{dfi2026,
-  title={DFI: Disentangled Feature Importance},
+  title={DFI: Python Library for Disentangled Feature Importance},
   author={DFI Team},
   year={2026},
   url={https://github.com/jaydu1/FDFI}

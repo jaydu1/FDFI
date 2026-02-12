@@ -4,28 +4,28 @@ Utilities
 Overview
 --------
 
-The ``dfi.utils`` module provides helper functions and classes used across 
+The ``fdfi.utils`` module provides helper functions and classes used across 
 the FDFI package.
 
 Input Validation
 ----------------
 
-.. autofunction:: dfi.utils.validate_input
+.. autofunction:: fdfi.utils.validate_input
 
 Data Sampling
 -------------
 
-.. autofunction:: dfi.utils.sample_background
+.. autofunction:: fdfi.utils.sample_background
 
 Feature Names
 -------------
 
-.. autofunction:: dfi.utils.get_feature_names
+.. autofunction:: fdfi.utils.get_feature_names
 
 Link Functions
 --------------
 
-.. autofunction:: dfi.utils.convert_to_link
+.. autofunction:: fdfi.utils.convert_to_link
 
 The following link functions are supported:
 
@@ -35,7 +35,7 @@ The following link functions are supported:
 Additivity Check
 ----------------
 
-.. autofunction:: dfi.utils.check_additivity
+.. autofunction:: fdfi.utils.check_additivity
 
 This function verifies the SHAP additivity property:
 
@@ -49,7 +49,7 @@ attributions.
 Feature Type Detection
 ----------------------
 
-.. autofunction:: dfi.utils.detect_feature_types
+.. autofunction:: fdfi.utils.detect_feature_types
 
 This function auto-detects whether features are binary, categorical, or 
 continuous based on the data distribution.
@@ -57,7 +57,7 @@ continuous based on the data distribution.
 Gower Distance
 --------------
 
-.. autofunction:: dfi.utils.gower_cost_matrix
+.. autofunction:: fdfi.utils.gower_cost_matrix
 
 Computes the Gower distance matrix for mixed-type data (continuous, binary, 
 and categorical features). Used by ``EOTExplainer`` when ``cost_metric="gower"``
@@ -69,7 +69,7 @@ Statistical Utilities
 TwoComponentMixture
 ~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: dfi.utils.TwoComponentMixture
+.. autoclass:: fdfi.utils.TwoComponentMixture
    :members:
    :special-members: __init__
    :show-inheritance:
@@ -86,7 +86,7 @@ and is used for:
 
 .. code-block:: python
 
-   from dfi.utils import TwoComponentMixture
+   from fdfi.utils import TwoComponentMixture
    import numpy as np
 
    # Fit mixture to standard errors

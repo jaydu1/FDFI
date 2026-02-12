@@ -4,7 +4,7 @@ Tests for FDFI utility functions.
 
 import pytest
 import numpy as np
-from dfi.utils import (
+from fdfi.utils import (
     validate_input,
     sample_background,
     get_feature_names,
