@@ -10,10 +10,10 @@ import sys
 sys.path.insert(0, os.path.abspath(".."))
 
 # -- Project information -----------------------------------------------------
-project = "DFI"
-copyright = "2024, DFI Team"
-author = "DFI Team"
-release = "0.0.1"
+project = "FDFI"
+copyright = "2025, FDFI Team"
+author = "FDFI Team"
+release = "0.0.2"
 
 # -- General configuration ---------------------------------------------------
 extensions = [
@@ -91,6 +91,7 @@ source_suffix = {
 # -- Options for HTML output -------------------------------------------------
 html_theme = "sphinx_rtd_theme"
 html_static_path = ["_static"]
+html_title = "FDFI Documentation"
 
 html_theme_options = {
     "logo_only": False,

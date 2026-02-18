@@ -9,8 +9,11 @@ from fdfi.utils import (
     sample_background,
     get_feature_names,
     convert_to_link,
-    check_additivity
+    check_additivity,
+    compute_latent_independence,
+    compute_mmd,
 )
+from fdfi.explainers import FlowExplainer
 
 
 class TestValidateInput:
@@ -145,3 +148,71 @@ class TestCheckAdditivity:
         satisfies, max_diff = check_additivity(shap_values, predictions, base_value, tol=1e-3)
         assert not satisfies
         assert max_diff > 1e-3
+
+
+class TestComputeLatentIndependence:
+    """Tests for compute_latent_independence."""
+
+    def test_independent_dims_have_low_dcor(self):
+        rng = np.random.default_rng(0)
+        Z = rng.standard_normal((200, 3))
+        _, median_dcor = compute_latent_independence(Z)
+        assert median_dcor < 0.2
+
+    def test_correlated_dims_have_higher_dcor(self):
+        rng = np.random.default_rng(1)
+        z1 = rng.standard_normal(200)
+        z2 = z1 + rng.normal(0, 0.05, 200)
+        z3 = rng.standard_normal(200)
+        Z = np.vstack([z1, z2, z3]).T
+        _, median_dcor = compute_latent_independence(Z)
+        assert median_dcor > 0.1
+
+
+class TestComputeMMD:
+    """Tests for compute_mmd."""
+
+    def test_identical_sets_have_near_zero_mmd(self):
+        rng = np.random.default_rng(0)
+        X = rng.standard_normal((100, 4))
+        mmd = compute_mmd(X, X.copy())
+        assert mmd < 1e-6
+
+    def test_shifted_sets_increase_mmd(self):
+        rng = np.random.default_rng(1)
+        X_real = rng.standard_normal((200, 4))
+        X_gen = X_real + 2.0  # clear shift
+        mmd = compute_mmd(X_real, X_gen)
+        assert mmd > 0.3
+
+
+class TestFlowExplainerDiagnostics:
+    """Tests for FlowExplainer diagnostics without requiring torch."""
+
+    def test_diagnostics_populated_and_labeled(self):
+        rng = np.random.default_rng(0)
+        X = rng.standard_normal((50, 3))
+
+        # Simple linear model
+        def model(x):
+            return x.sum(axis=1)
+
+        explainer = FlowExplainer(
+            model=model,
+            data=X,
+            flow_model=None,
+            fit_flow=False,
+            verbose=False,
+            nsamples=5,
+        )
+
+        # Bypass flow decode with identity to avoid torch dependency
+        explainer._decode_to_X = lambda Z, **kwargs: Z
+        explainer.Z_full = X
+        explainer._compute_diagnostics(X_orig=X, Z_full=X, report_title="Flow Model")
+
+        diag = explainer.diagnostics
+        assert "latent_independence_median" in diag
+        assert "distribution_fidelity_mmd" in diag
+        assert diag["latent_independence_label"] in {"GOOD", "MODERATE", "POOR"}
+        assert diag["distribution_fidelity_label"] in {"GOOD", "MODERATE", "POOR"}

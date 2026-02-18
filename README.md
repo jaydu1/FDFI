@@ -6,6 +6,8 @@
 
 A Python library for computing feature importance using disentangled methods, inspired by SHAP.
 
+Current release: `0.0.2`
+
 ## Overview
 
 FDFI (Flow-Disentangled Feature Importance) is a Python module that provides interpretable machine learning explanations through disentangled feature importance methods. This package implements both DFI (Disentangled Feature Importance) and FDFI (Flow-DFI) methods. Similar to SHAP, FDFI helps you understand which features are driving your model's predictions.
@@ -63,6 +65,16 @@ results = explainer(X_test)
 ci = explainer.conf_int(alpha=0.05, target="X", alternative="two-sided")
 ```
 
+### CI Defaults in v0.0.2
+
+By default, `conf_int()` now uses:
+
+- `var_floor_method="mixture"`
+- `margin_method="mixture"`
+
+This improves stability for weak effects and avoids ad hoc thresholding in many use cases.
+You can still override both methods explicitly if needed.
+
 ## EOT Options (Entropic OT)
 
 `EOTExplainer` supports adaptive epsilon, stochastic transport sampling, and
@@ -109,6 +121,29 @@ results = explainer(X_test)
 
 # Confidence intervals
 ci = explainer.conf_int(alpha=0.05, target="Z", alternative="two-sided")
+```
+
+### Explainer diagnostics (new in v0.0.2)
+
+Disentangled explainers (`OTExplainer`, `EOTExplainer`, and `FlowExplainer`) report two diagnostics with qualitative labels (GOOD / MODERATE / POOR) using consistent `[FDFI][DIAG]` logging:
+
+- **Latent independence (median dCor)** — lower is better (thresholds: <0.10 good, <0.25 moderate).
+- **Distribution fidelity (MMD)** — lower is better (thresholds: <0.05 good, <0.15 moderate).
+
+Example log:
+
+```
+[FDFI][DIAG] Flow Model Diagnostics
+[FDFI][DIAG] Latent independence (median dCor): 0.0421 [GOOD]  → lower is better
+[FDFI][DIAG] Distribution fidelity (MMD):       0.0187 [GOOD]  → lower is better
+```
+
+Access diagnostics directly:
+
+```python
+diag = explainer.diagnostics
+print(diag["latent_independence_median"], diag["latent_independence_label"])
+print(diag["distribution_fidelity_mmd"], diag["distribution_fidelity_label"])
 ```
 
 For advanced users, flow models can be trained separately:

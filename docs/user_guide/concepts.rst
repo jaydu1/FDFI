@@ -122,6 +122,17 @@ varies with position and is computed via automatic differentiation.
 - When OT assumptions are too restrictive
 - When you have sufficient data (>500 samples) to train the flow
 
+Shared Disentanglement Diagnostics
+----------------------------------
+
+All disentangled explainers (OT, EOT, Flow) report two common diagnostics:
+
+- **Latent independence**: median pairwise distance correlation in latent space.
+- **Distribution fidelity**: MMD between original data and reconstructed data.
+
+Both are "lower is better" metrics and are reported with qualitative labels
+(``GOOD``, ``MODERATE``, ``POOR``) using shared thresholds.
+
 Relationship to Other Methods
 -----------------------------
 

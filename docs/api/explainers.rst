@@ -100,6 +100,28 @@ and empirical transport targets.
    )
    results = explainer(X_test)
 
+Shared Disentanglement Diagnostics
+----------------------------------
+
+``OTExplainer``, ``EOTExplainer``, and ``FlowExplainer`` expose a shared
+diagnostics interface via:
+
+- ``explainer.diagnostics`` (computed at setup by default)
+- ``explainer.diagnose(...)`` (recompute manually)
+
+The diagnostics dictionary contains:
+
+- ``latent_independence_dcor`` (pairwise dCor matrix)
+- ``latent_independence_median`` and ``latent_independence_label``
+- ``distribution_fidelity_mmd`` and ``distribution_fidelity_label``
+
+.. code-block:: python
+
+   diag = explainer.diagnostics
+   # or: diag = explainer.diagnose()
+   print(diag["latent_independence_median"], diag["latent_independence_label"])
+   print(diag["distribution_fidelity_mmd"], diag["distribution_fidelity_label"])
+
 Flow-Based DFI (FlowExplainer)
 ------------------------------
 

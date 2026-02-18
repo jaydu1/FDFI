@@ -9,7 +9,13 @@ import numpy as np
 from typing import Optional, Union, Callable, Any, Tuple
 from scipy.spatial.distance import cdist, pdist
 from scipy import stats
-from .utils import TwoComponentMixture, detect_feature_types, gower_cost_matrix
+from .utils import (
+    TwoComponentMixture,
+    detect_feature_types,
+    gower_cost_matrix,
+    compute_latent_independence,
+    compute_mmd,
+)
 
 
 
@@ -71,6 +77,18 @@ class Explainer:
         self._var_floor_mixture = None
         self._margin_mixture = None
         self._var_floor_value = None
+        self.verbose = kwargs.get("verbose", False)
+        self.diagnostics = None
+        self.compute_diagnostics = kwargs.get("compute_diagnostics", True)
+        self.diagnostics_subset_max_samples = kwargs.get(
+            "diagnostics_subset_max_samples", 1000
+        )
+        self.latent_independence_thresholds = kwargs.get(
+            "latent_independence_thresholds", (0.1, 0.25)
+        )
+        self.distribution_fidelity_thresholds = kwargs.get(
+            "distribution_fidelity_thresholds", (0.05, 0.15)
+        )
 
         fit_flow = kwargs.get("fit_flow", True)
         self.flow_engine = None
@@ -97,8 +115,8 @@ class Explainer:
         self,
         se_raw: np.ndarray,
         var_floor_c: float = 0.1,
-        var_floor_method: str = "fixed",
-        var_floor_quantile: float = 0.05,
+        var_floor_method: str = "mixture",
+        var_floor_quantile: float = 0.95,
     ) -> np.ndarray:
         if self._last_n is None:
             return se_raw
@@ -120,10 +138,10 @@ class Explainer:
         alpha: float = 0.05,
         target: str = "X",
         var_floor_c: float = 0.1,
-        var_floor_method: str = "fixed",
+        var_floor_method: str = "mixture",
         var_floor_quantile: float = 0.95,
         margin: float = 0.0,
-        margin_method: str = "fixed",
+        margin_method: str = "mixture",
         margin_quantile: float = 0.95,
         alternative: str = "two-sided",
     ) -> dict:
@@ -247,6 +265,154 @@ class Explainer:
         if print_output:
             print(output)
         return output
+
+    def _log(self, message: str, level: str = "INFO") -> None:
+        """Consistent, verbosity-aware logging with unified style."""
+        v = getattr(self, "verbose", False)
+        if v is False:
+            return
+        if v in ("all", True, "final"):
+            print(f"[FDFI][{level.upper()}] {message}")
+
+    @staticmethod
+    def _qualitative_score(
+        value: float,
+        thresholds: Tuple[float, float],
+        lower_is_better: bool = True,
+    ) -> str:
+        """
+        Return GOOD / MODERATE / POOR label based on thresholds.
+
+        thresholds: (good_cutoff, moderate_cutoff); behavior flips if lower_is_better=False.
+        """
+        good, moderate = thresholds
+        if lower_is_better:
+            if value < good:
+                return "GOOD"
+            if value < moderate:
+                return "MODERATE"
+            return "POOR"
+        if value > moderate:
+            return "POOR"
+        if value > good:
+            return "MODERATE"
+        return "GOOD"
+
+    def _decode_from_Z(self, Z: np.ndarray) -> np.ndarray:
+        """
+        Decode latent-space samples to original feature space.
+
+        Subclasses with disentanglement maps (OT/EOT/Flow) should implement this.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement latent decoding."
+        )
+
+    def _get_diagnostics_sources(self) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        """Return default (X_orig, Z_full) used for diagnostics."""
+        return self.data, getattr(self, "Z_full", None)
+
+    def _compute_diagnostics(
+        self,
+        X_orig: Optional[np.ndarray] = None,
+        Z_full: Optional[np.ndarray] = None,
+        report_title: Optional[str] = None,
+    ) -> Optional[dict]:
+        """
+        Compute and store generic disentanglement diagnostics.
+
+        Diagnostics:
+        - Latent independence: median distance correlation across latent dims.
+        - Distribution fidelity: Maximum Mean Discrepancy (MMD) between
+          original data and reconstructions.
+        """
+        if not self.compute_diagnostics:
+            return None
+
+        if X_orig is None or Z_full is None:
+            default_X, default_Z = self._get_diagnostics_sources()
+            if X_orig is None:
+                X_orig = default_X
+            if Z_full is None:
+                Z_full = default_Z
+
+        if X_orig is None or Z_full is None:
+            return None
+
+        X_arr = np.asarray(X_orig)
+        Z_arr = np.asarray(Z_full)
+        if X_arr.ndim != 2 or Z_arr.ndim != 2:
+            raise ValueError("X_orig and Z_full must both be 2D arrays.")
+
+        n = min(X_arr.shape[0], Z_arr.shape[0])
+        if n == 0:
+            return None
+        X_use = X_arr[:n]
+        Z_use = Z_arr[:n]
+
+        subset_size = None
+        if (
+            self.diagnostics_subset_max_samples is not None
+            and n > self.diagnostics_subset_max_samples
+        ):
+            subset_size = int(self.diagnostics_subset_max_samples)
+
+        dcor_matrix, median_dcor = compute_latent_independence(
+            Z_use, subset_size=subset_size
+        )
+        dcor_label = self._qualitative_score(
+            float(median_dcor),
+            thresholds=self.latent_independence_thresholds,
+            lower_is_better=True,
+        )
+
+        X_hat = self._decode_from_Z(Z_use)
+        mmd_score = compute_mmd(X_use, X_hat, subset_size=subset_size)
+        mmd_label = self._qualitative_score(
+            float(mmd_score),
+            thresholds=self.distribution_fidelity_thresholds,
+            lower_is_better=True,
+        )
+
+        self.diagnostics = {
+            "latent_independence_dcor": dcor_matrix,
+            "latent_independence_median": float(median_dcor),
+            "distribution_fidelity_mmd": float(mmd_score),
+            "latent_independence_label": dcor_label,
+            "distribution_fidelity_label": mmd_label,
+        }
+
+        title = report_title if report_title is not None else self.__class__.__name__
+        self._log(f"{title} Diagnostics", level="diag")
+        self._log(
+            f"Latent independence (median dCor): {median_dcor:.6f} [{dcor_label}]  "
+            "-> lower is better",
+            level="diag",
+        )
+        self._log(
+            f"Distribution fidelity (MMD):       {mmd_score:.6f} [{mmd_label}]  "
+            "-> lower is better",
+            level="diag",
+        )
+        return self.diagnostics
+
+    def diagnose(
+        self,
+        X_orig: Optional[np.ndarray] = None,
+        Z_full: Optional[np.ndarray] = None,
+        report_title: Optional[str] = None,
+    ) -> dict:
+        """Public API to compute (or recompute) diagnostics."""
+        diagnostics = self._compute_diagnostics(
+            X_orig=X_orig,
+            Z_full=Z_full,
+            report_title=report_title,
+        )
+        if diagnostics is None:
+            raise ValueError(
+                "Diagnostics unavailable. Ensure diagnostics are enabled and latent data exists."
+            )
+        return diagnostics
     
     def __call__(
         self,
@@ -500,6 +666,7 @@ class OTExplainer(Explainer):
         self.L_inv = eigenvecs @ np.diag(eigenvals**-0.5) @ eigenvecs.T
 
         self.Z_full = (data - self.mean) @ self.L_inv
+        self._compute_diagnostics(report_title="OTExplainer")
 
     def __call__(self, X: np.ndarray, **kwargs: Any) -> np.ndarray:
        
@@ -575,6 +742,10 @@ class OTExplainer(Explainer):
         # Return per-sample UEIFs in latent space (no aggregation here)
         return ueifs_Z
 
+    def _decode_from_Z(self, Z: np.ndarray) -> np.ndarray:
+        """Decode Z to X using the Gaussian OT linear map."""
+        return Z @ self.L + self.mean
+
 
 class EOTExplainer(Explainer):
     """
@@ -589,6 +760,7 @@ class EOTExplainer(Explainer):
       - auto_epsilon: enable median-distance heuristic
       - stochastic_transport: sample from k(z|x) instead of barycentric map
       - target: "gaussian" or "empirical" transport target
+      - decode_method: "auto" (default), "knn", or "linear" latent decoder
     """
     def __init__(
         self,
@@ -611,6 +783,10 @@ class EOTExplainer(Explainer):
         sampling_method: str = "resample",
         stochastic_transport: bool = False,
         n_transport_samples: int = 10,
+        decode_method: str = "auto",
+        decode_n_neighbors: int = 25,
+        decode_weights: Union[str, Callable] = "distance",
+        decode_leave_one_out: bool = True,
         random_state: int = 0,
         **kwargs: Any
     ):
@@ -632,11 +808,18 @@ class EOTExplainer(Explainer):
         self.sampling_method = sampling_method
         self.stochastic_transport = stochastic_transport
         self.n_transport_samples = n_transport_samples
+        self.decode_method = decode_method
+        self.decode_n_neighbors = decode_n_neighbors
+        self.decode_weights = decode_weights
+        self.decode_leave_one_out = decode_leave_one_out
+        self.decode_method_effective_ = "linear"
         self.random_state = random_state
         self.regularize = kwargs.get("regularize", 1e-6)
         self.transport_plan_ = None
         self.Z_target_ = None
         self.Z_gauss_ = None
+        self._decode_model = None
+        self.X_centered_ = None
         self.detected_types_ = None
 
         self.mean = np.mean(data, axis=0, keepdims=True)
@@ -650,6 +833,7 @@ class EOTExplainer(Explainer):
         self.L_inv = eigenvecs @ np.diag(eigenvals**-0.5) @ eigenvecs.T
 
         X_centered = data - self.mean
+        self.X_centered_ = X_centered
         Z_gauss = X_centered @ self.L_inv
         self.Z_gauss_ = Z_gauss
         if self.auto_epsilon:
@@ -662,6 +846,10 @@ class EOTExplainer(Explainer):
             self.Z_fit_ = (1.0 - self.alpha) * Z_gauss + self.alpha * Z_entropic
         else:
             raise ValueError(f"Unknown transport_type: {self.transport_type}")
+
+        self._build_decoder()
+        self.Z_full = self.Z_fit_
+        self._compute_diagnostics(report_title="EOTExplainer")
 
     def __call__(self, X: np.ndarray, **kwargs: Any) -> np.ndarray:
         n, d = X.shape
@@ -736,17 +924,29 @@ class EOTExplainer(Explainer):
         return ueifs_Z
 
     def _auto_epsilon(self, X_centered: np.ndarray) -> float:
+        """
+        Auto-tune epsilon from latent geometry.
+
+        We estimate pairwise distances in Gaussian-whitened latent space and use
+        a conservative shrinkage factor to avoid over-smoothing transport plans
+        on multi-modal data.
+        """
         if X_centered.shape[0] < 2:
             return self.epsilon
-        n = min(1000, X_centered.shape[0])
+
+        Z_ref = X_centered @ self.L_inv
+        n = min(1000, Z_ref.shape[0])
         rng = np.random.default_rng(self.random_state)
-        idx = rng.choice(X_centered.shape[0], size=n, replace=False)
-        X_sub = X_centered[idx]
-        dists = pdist(X_sub)
-        if dists.size == 0:
+        idx = rng.choice(Z_ref.shape[0], size=n, replace=False)
+        Z_sub = Z_ref[idx]
+
+        sq_dists = pdist(Z_sub, metric="sqeuclidean")
+        if sq_dists.size == 0:
             return self.epsilon
-        median_dist = np.median(dists)
-        return (median_dist ** 2) / X_centered.shape[1]
+
+        median_sq_dist = np.median(sq_dists)
+        eps = 0.25 * (median_sq_dist / Z_ref.shape[1])
+        return max(eps, 1e-3)
 
     def _make_target(self, Z_gauss: np.ndarray) -> np.ndarray:
         rng = np.random.default_rng(self.random_state)
@@ -818,6 +1018,98 @@ class EOTExplainer(Explainer):
             return (1.0 - self.alpha) * self.Z_gauss_ + self.alpha * Z_entropic
         return Z_entropic
 
+    def _build_decoder(self) -> None:
+        """Build optional nonlinear decoder from latent Z to original X."""
+        if self.decode_method == "linear":
+            self.decode_method_effective_ = "linear"
+            self._decode_model = None
+            return
+        if self.decode_method not in ("knn", "auto"):
+            raise ValueError(
+                "decode_method must be 'auto', 'linear', or 'knn'"
+            )
+        try:
+            from sklearn.neighbors import NearestNeighbors
+        except ImportError as exc:
+            raise ImportError(
+                "decode_method='knn' requires scikit-learn."
+            ) from exc
+
+        n_neighbors = int(max(1, min(self.decode_n_neighbors, self.Z_fit_.shape[0])))
+        self._decode_model = NearestNeighbors(n_neighbors=n_neighbors)
+        self._decode_model.fit(self.Z_fit_)
+
+        if self.decode_method == "knn":
+            self.decode_method_effective_ = "knn"
+            return
+
+        # Auto-select the decoder with lower reconstruction MSE on training pairs.
+        X_linear = self.Z_fit_ @ self.L
+        mse_linear = float(np.mean((self.X_centered_ - X_linear) ** 2))
+        X_knn = self._predict_knn_centered(self.Z_fit_)
+        mse_knn = float(np.mean((self.X_centered_ - X_knn) ** 2))
+
+        if mse_knn < mse_linear:
+            self.decode_method_effective_ = "knn"
+        else:
+            self.decode_method_effective_ = "linear"
+            self._decode_model = None
+
+    def _predict_knn_centered(self, Z_arr: np.ndarray) -> np.ndarray:
+        """Predict centered X from Z via the configured kNN decoder."""
+        if self._decode_model is None:
+            raise RuntimeError("kNN decoder is not initialized.")
+
+        n_train = self.Z_fit_.shape[0]
+        k = int(max(1, min(self.decode_n_neighbors, n_train)))
+        k_query = min(
+            n_train,
+            k + 1 if self.decode_leave_one_out and n_train > 1 else k,
+        )
+        dists, nbr_idx = self._decode_model.kneighbors(
+            Z_arr, n_neighbors=k_query, return_distance=True
+        )
+
+        X_centered_hat = np.zeros((Z_arr.shape[0], self.X_centered_.shape[1]))
+        for i in range(Z_arr.shape[0]):
+            row_idx = nbr_idx[i]
+            row_dist = dists[i]
+
+            if (
+                self.decode_leave_one_out
+                and row_dist.size > 1
+                and row_dist[0] <= 1e-12
+            ):
+                row_idx = row_idx[1:]
+                row_dist = row_dist[1:]
+
+            row_idx = row_idx[:k]
+            row_dist = row_dist[:k]
+            X_neighbors = self.X_centered_[row_idx]
+
+            if callable(self.decode_weights):
+                w = np.asarray(self.decode_weights(row_dist))
+                if w.shape != row_dist.shape:
+                    raise ValueError(
+                        "decode_weights callable must return shape (n_neighbors,)."
+                    )
+                w = np.maximum(w, 0.0)
+                if w.sum() <= 0:
+                    w = np.ones_like(row_dist)
+                w = w / w.sum()
+                X_centered_hat[i] = w @ X_neighbors
+            elif self.decode_weights == "uniform":
+                X_centered_hat[i] = X_neighbors.mean(axis=0)
+            elif self.decode_weights == "distance":
+                w = 1.0 / np.maximum(row_dist, 1e-12)
+                w = w / w.sum()
+                X_centered_hat[i] = w @ X_neighbors
+            else:
+                raise ValueError(
+                    "decode_weights must be 'uniform', 'distance', or a callable."
+                )
+        return X_centered_hat
+
     def _sinkhorn(self, C: np.ndarray) -> np.ndarray:
         n, m = C.shape
         a = np.ones(n) / n
@@ -839,6 +1131,23 @@ class EOTExplainer(Explainer):
         P = np.diag(u) @ K @ np.diag(v)
         row_sums = P.sum(axis=1, keepdims=True)
         return P / np.maximum(row_sums, 1e-300)
+
+    def _decode_from_Z(self, Z: np.ndarray) -> np.ndarray:
+        """
+        Decode Z to X.
+
+        - linear: Gaussian reference map X = ZL + mean
+        - knn: local nonlinear inverse map fitted on (Z_fit_, X_centered)
+        """
+        Z_arr = np.asarray(Z)
+        if Z_arr.ndim != 2:
+            raise ValueError("Z must be a 2D array.")
+
+        if self.decode_method_effective_ == "knn" and self._decode_model is not None:
+            X_centered_hat = self._predict_knn_centered(Z_arr)
+        else:
+            X_centered_hat = Z_arr @ self.L
+        return X_centered_hat + self.mean
 
 
 DFIExplainer = OTExplainer
@@ -893,6 +1202,16 @@ class FlowExplainer(Explainer):
         - True or 'all': Show full progress bar
         - 'final': Only print final step status (default)
         - False: Silent
+    compute_diagnostics : bool, default=True
+        Whether to compute disentanglement diagnostics at setup time.
+    flow_solver_rtol : float, default=1e-3
+        Relative tolerance for default ODE integration in flow encode/decode.
+    flow_solver_atol : float, default=1e-5
+        Absolute tolerance for default ODE integration in flow encode/decode.
+    diagnostics_solver_rtol : float, default=1e-6
+        Relative tolerance for diagnostics round-trip integration.
+    diagnostics_solver_atol : float, default=1e-8
+        Absolute tolerance for diagnostics round-trip integration.
     **kwargs : dict
         Additional arguments passed to FlowMatchingModel if creating default.
     
@@ -939,11 +1258,19 @@ class FlowExplainer(Explainer):
         method: str = "cpi",
         random_state: Optional[int] = None,
         verbose: Union[bool, str] = "final",
+        compute_diagnostics: bool = True,
         **kwargs: Any
     ):
         """Initialize the FlowExplainer."""
         # Don't fit flow in base class
-        super().__init__(model, data, fit_flow=False, **kwargs)
+        super().__init__(
+            model,
+            data,
+            fit_flow=False,
+            verbose=verbose,
+            compute_diagnostics=compute_diagnostics,
+            **kwargs,
+        )
         
         self.nsamples = nsamples
         self.sampling_method = sampling_method
@@ -951,6 +1278,15 @@ class FlowExplainer(Explainer):
         self.method = method.lower()
         self.verbose = verbose
         self.kwargs = kwargs
+        self.flow_solver_method = kwargs.get("flow_solver_method", "dopri5")
+        self.flow_solver_rtol = kwargs.get("flow_solver_rtol", 1e-3)
+        self.flow_solver_atol = kwargs.get("flow_solver_atol", 1e-5)
+        self.diagnostics_solver_method = kwargs.get(
+            "diagnostics_solver_method", self.flow_solver_method
+        )
+        self.diagnostics_solver_rtol = kwargs.get("diagnostics_solver_rtol", 1e-6)
+        self.diagnostics_solver_atol = kwargs.get("diagnostics_solver_atol", 1e-8)
+        self.flow_training_seed = kwargs.get("flow_training_seed", self.random_state)
         
         if self.method not in ("cpi", "scpi", "both"):
             raise ValueError(f"method must be 'cpi', 'scpi', or 'both', got '{method}'")
@@ -969,6 +1305,8 @@ class FlowExplainer(Explainer):
         if flow_model is not None:
             # Use provided flow model
             self._encode_background()
+            if self.Z_full is not None:
+                self._refresh_flow_diagnostics()
         elif fit_flow and data is not None:
             # Create and fit default flow model
             self.fit_flow(num_steps=kwargs.get("num_steps", 5000), verbose=self.verbose)
@@ -1017,6 +1355,13 @@ class FlowExplainer(Explainer):
             raise ImportError(
                 "Flow matching requires torch; install it with: pip install torch torchdiffeq"
             ) from exc
+
+        import torch
+        if self.flow_training_seed is not None:
+            torch.manual_seed(int(self.flow_training_seed))
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(int(self.flow_training_seed))
+            np.random.seed(int(self.flow_training_seed))
         
         d = self.data.shape[1]
         self.flow_model = FlowMatchingModel(
@@ -1030,12 +1375,15 @@ class FlowExplainer(Explainer):
         )
         
         _verbose = verbose if verbose is not None else getattr(self, 'verbose', 'final')
-        if _verbose is True or _verbose == 'all':
-            print("Training flow model...")
+        self.verbose = _verbose
+        if _verbose is True or _verbose == 'all' or _verbose == 'final':
+            self._log("Training flow model...", level="info")
         self.flow_model.fit(num_steps=num_steps, verbose=_verbose, **kwargs)
         
         # Encode background data
         self._encode_background()
+        if self.Z_full is not None:
+            self._refresh_flow_diagnostics()
         
         return self
     
@@ -1059,6 +1407,8 @@ class FlowExplainer(Explainer):
         """
         self.flow_model = flow_model
         self._encode_background()
+        if self.Z_full is not None:
+            self._refresh_flow_diagnostics()
         return self
     
     def _encode_background(self) -> None:
@@ -1066,29 +1416,91 @@ class FlowExplainer(Explainer):
         if self.data is not None and self.flow_model is not None:
             self.Z_full = self._encode_to_Z(self.data)
     
-    def _encode_to_Z(self, X: np.ndarray) -> np.ndarray:
+    def _encode_to_Z(
+        self,
+        X: np.ndarray,
+        rtol: Optional[float] = None,
+        atol: Optional[float] = None,
+        method: Optional[str] = None,
+    ) -> np.ndarray:
         """Transform X to latent space Z."""
         if self.flow_model is None:
             raise ValueError("Flow model not set. Call fit_flow() or set_flow() first.")
         
+        _rtol = self.flow_solver_rtol if rtol is None else rtol
+        _atol = self.flow_solver_atol if atol is None else atol
+        _method = self.flow_solver_method if method is None else method
+
         import torch
         with torch.no_grad():
-            Z = self.flow_model.sample_batch(X, t_span=(1, 0))
+            Z = self.flow_model.sample_batch(
+                X,
+                t_span=(1, 0),
+                rtol=_rtol,
+                atol=_atol,
+                method=_method,
+            )
             if isinstance(Z, torch.Tensor):
                 Z = Z.cpu().numpy()
         return Z
     
-    def _decode_to_X(self, Z: np.ndarray) -> np.ndarray:
+    def _decode_to_X(
+        self,
+        Z: np.ndarray,
+        rtol: Optional[float] = None,
+        atol: Optional[float] = None,
+        method: Optional[str] = None,
+    ) -> np.ndarray:
         """Transform Z back to X space."""
         if self.flow_model is None:
             raise ValueError("Flow model not set. Call fit_flow() or set_flow() first.")
         
+        _rtol = self.flow_solver_rtol if rtol is None else rtol
+        _atol = self.flow_solver_atol if atol is None else atol
+        _method = self.flow_solver_method if method is None else method
+
         import torch
         with torch.no_grad():
-            X_hat = self.flow_model.sample_batch(Z, t_span=(0, 1))
+            X_hat = self.flow_model.sample_batch(
+                Z,
+                t_span=(0, 1),
+                rtol=_rtol,
+                atol=_atol,
+                method=_method,
+            )
             if isinstance(X_hat, torch.Tensor):
                 X_hat = X_hat.cpu().numpy()
         return X_hat
+
+    def _decode_from_Z(self, Z: np.ndarray) -> np.ndarray:
+        """
+        Decode Z to X for diagnostics using tighter ODE tolerances.
+
+        This keeps reconstruction-fidelity diagnostics focused on model fit
+        rather than numerical integration error.
+        """
+        return self._decode_to_X(
+            Z,
+            rtol=self.diagnostics_solver_rtol,
+            atol=self.diagnostics_solver_atol,
+            method=self.diagnostics_solver_method,
+        )
+
+    def _refresh_flow_diagnostics(self) -> None:
+        """Compute diagnostics from high-precision X -> Z -> X round-trip."""
+        if self.data is None or self.flow_model is None:
+            return
+        Z_diag = self._encode_to_Z(
+            self.data,
+            rtol=self.diagnostics_solver_rtol,
+            atol=self.diagnostics_solver_atol,
+            method=self.diagnostics_solver_method,
+        )
+        self._compute_diagnostics(
+            X_orig=self.data,
+            Z_full=Z_diag,
+            report_title="Flow Model",
+        )
     
     def _compute_jacobian(self, Z: np.ndarray, batch_size: int = 50) -> np.ndarray:
         """
@@ -1131,7 +1543,13 @@ class FlowExplainer(Explainer):
         def decoder_fn(z_single):
             """Decode a single Z vector to X."""
             z_batch = z_single.unsqueeze(0)  # (1, d)
-            x_batch = self.flow_model.sample_batch(z_batch, t_span=(0, 1))
+            x_batch = self.flow_model.sample_batch(
+                z_batch,
+                t_span=(0, 1),
+                rtol=self.flow_solver_rtol,
+                atol=self.flow_solver_atol,
+                method=self.flow_solver_method,
+            )
             if not isinstance(x_batch, torch.Tensor):
                 x_batch = torch.tensor(x_batch, dtype=torch.float32, device=device)
             return x_batch.squeeze(0)  # (d,)
