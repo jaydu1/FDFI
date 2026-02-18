@@ -94,12 +94,23 @@ results = explainer(X_test)
 
 ### EOTExplainer (Entropic OT)
 
-Entropic OT DFI using a learned transport kernel:
+Entropic OT DFI using a learned transport kernel (useful for non-Gaussian and mixed-type tabular data):
 
 ```python
+import numpy as np
 from fdfi.explainers import EOTExplainer
 
-explainer = EOTExplainer(model.predict, X_background, epsilon=0.1, nsamples=50)
+feature_types = np.array(["continuous", "binary", "categorical", "continuous"])
+
+explainer = EOTExplainer(
+    model.predict,
+    X_background,
+    nsamples=50,
+    cost_metric="gower",
+    feature_types=feature_types,
+    auto_epsilon=True,
+    target="empirical",
+)
 results = explainer(X_test)
 ```
 
@@ -116,13 +127,27 @@ explainer = EOTExplainer(
 )
 ```
 
-### Confidence Intervals
+### Attribution Inference (Confidence Intervals)
 
-All explainers support post-hoc CIs via `conf_int`:
+All explainers support post-hoc attribution inference via `conf_int`:
 
 ```python
 results = explainer(X_test)
 ci = explainer.conf_int(alpha=0.05, target="X", alternative="two-sided")
+```
+
+In v0.0.2, `conf_int` defaults to mixture-based methods for both variance floor
+and practical margin. You can still pass explicit methods/quantiles to override.
+
+### Disentanglement Diagnostics
+
+`OTExplainer`, `EOTExplainer`, and `FlowExplainer` expose a shared
+`diagnostics` dictionary:
+
+```python
+diag = explainer.diagnostics
+print(diag["latent_independence_median"], diag["latent_independence_label"])
+print(diag["distribution_fidelity_mmd"], diag["distribution_fidelity_label"])
 ```
 
 ## Next Steps

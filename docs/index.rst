@@ -1,5 +1,5 @@
-DFI Documentation
-=================
+FDFI Documentation
+==================
 
 .. image:: https://img.shields.io/badge/License-MIT-yellow.svg
    :target: https://opensource.org/licenses/MIT
@@ -9,15 +9,16 @@ DFI Documentation
    :target: https://www.python.org/downloads/
    :alt: Python 3.8+
 
-**DFI** (Disentangled Feature Importance) is a Python library for computing 
+**FDFI** (Flow-Disentangled Feature Importance) is a Python library for computing
 feature importance using disentangled methods, inspired by SHAP. This package
-implements both DFI and FDFI (Flow-DFI) methods.
+implements both OT-based DFI and flow-based FDFI methods.
 
 Key Features
 ------------
 
 - 🎯 **Multiple Explainer Types**: Tree, Linear, Kernel, and Optimal Transport explainers
 - 🧭 **OT-Based DFI**: Gaussian OT (OTExplainer) and Entropic OT (EOTExplainer)
+- 🔍 **Shared Diagnostics**: Latent independence and fidelity checks for OT/EOT/Flow
 - 📊 **Statistical Inference**: Confidence intervals and hypothesis testing
 - 🔧 **Easy to Use**: Simple API similar to SHAP
 - 🚀 **Extensible**: Built with modularity for future enhancements

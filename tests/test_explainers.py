@@ -4,6 +4,7 @@ Tests for FDFI explainers.
 
 import pytest
 import numpy as np
+import importlib.util
 from fdfi.explainers import (
     Explainer,
     TreeExplainer,
@@ -13,6 +14,8 @@ from fdfi.explainers import (
     EOTExplainer,
     FlowExplainer,
 )
+
+HAS_TORCH = importlib.util.find_spec("torch") is not None
 
 
 class TestExplainer:
@@ -200,6 +203,30 @@ class TestOTExplainer:
         )
         assert np.all(ci["ci_lower"][:10] > 0)
 
+    def test_diagnostics_populated(self):
+        X_train, _ = generate_exp3_data(n=120, seed=11)
+        explainer = OTExplainer(exp3_model, X_train, nsamples=5, random_state=0)
+
+        diag = explainer.diagnostics
+        assert diag is not None
+        assert "latent_independence_median" in diag
+        assert "distribution_fidelity_mmd" in diag
+        assert diag["latent_independence_label"] in {"GOOD", "MODERATE", "POOR"}
+        assert diag["distribution_fidelity_label"] in {"GOOD", "MODERATE", "POOR"}
+
+    def test_diagnostics_can_be_disabled(self):
+        X_train, _ = generate_exp3_data(n=80, seed=12)
+        explainer = OTExplainer(
+            exp3_model,
+            X_train,
+            nsamples=5,
+            random_state=0,
+            compute_diagnostics=False,
+        )
+        assert explainer.diagnostics is None
+        with pytest.raises(ValueError, match="Diagnostics unavailable"):
+            explainer.diagnose()
+
 
 class TestEOTExplainer:
     def test_exp3_mean_variance_consistency(self):
@@ -244,12 +271,121 @@ class TestEOTExplainer:
         )
         assert np.all(ci["ci_lower"][:10] > 0)
 
+    def test_diagnostics_populated(self):
+        X_train, _ = generate_exp3_data(n=90, seed=13)
+        explainer = EOTExplainer(exp3_model, X_train, nsamples=5, random_state=0)
+
+        diag = explainer.diagnostics
+        assert diag is not None
+        assert "latent_independence_median" in diag
+        assert "distribution_fidelity_mmd" in diag
+        assert diag["latent_independence_label"] in {"GOOD", "MODERATE", "POOR"}
+        assert diag["distribution_fidelity_label"] in {"GOOD", "MODERATE", "POOR"}
+
+    def test_auto_epsilon_handles_bimodal_data(self):
+        rng = np.random.default_rng(21)
+        n, d = 200, 5
+        X_train = np.vstack(
+            [
+                rng.standard_normal((n // 2, d)) - 2.0,
+                rng.standard_normal((n // 2, d)) + 2.0,
+            ]
+        )
+        rng.shuffle(X_train)
+
+        def bimodal_model(X):
+            return X[:, 0] ** 2 + 0.5 * X[:, 1]
+
+        explainer = EOTExplainer(
+            bimodal_model,
+            X_train,
+            nsamples=10,
+            auto_epsilon=True,
+            random_state=0,
+        )
+
+        assert explainer.epsilon < 2.0
+        assert explainer.diagnostics["latent_independence_median"] < 0.25
+        assert explainer.diagnostics["distribution_fidelity_mmd"] < 0.25
+
+    def test_decode_method_validation(self):
+        X_train, _ = generate_exp3_data(n=80, seed=31)
+        with pytest.raises(ValueError, match="decode_method"):
+            EOTExplainer(
+                exp3_model,
+                X_train,
+                decode_method="unknown",
+            )
+
+    def test_auto_decoder_matches_best_reconstruction_mse(self):
+        rng = np.random.default_rng(22)
+        n, d = 200, 5
+        X_train = np.vstack(
+            [
+                rng.standard_normal((n // 2, d)) - 2.0,
+                rng.standard_normal((n // 2, d)) + 2.0,
+            ]
+        )
+        rng.shuffle(X_train)
+
+        def bimodal_model(X):
+            return X[:, 0] ** 2 + 0.5 * X[:, 1]
+
+        linear_exp = EOTExplainer(
+            bimodal_model,
+            X_train,
+            nsamples=10,
+            auto_epsilon=False,
+            epsilon=0.2,
+            target="empirical",
+            decode_method="linear",
+            random_state=0,
+        )
+        knn_exp = EOTExplainer(
+            bimodal_model,
+            X_train,
+            nsamples=10,
+            auto_epsilon=False,
+            epsilon=0.2,
+            target="empirical",
+            decode_method="knn",
+            random_state=0,
+        )
+        auto_exp = EOTExplainer(
+            bimodal_model,
+            X_train,
+            nsamples=10,
+            auto_epsilon=False,
+            epsilon=0.2,
+            target="empirical",
+            decode_method="auto",
+            random_state=0,
+        )
+
+        x_lin = linear_exp._decode_from_Z(linear_exp.Z_full)
+        x_knn = knn_exp._decode_from_Z(knn_exp.Z_full)
+        mse_linear = float(np.mean((x_lin - X_train) ** 2))
+        mse_knn = float(np.mean((x_knn - X_train) ** 2))
+        best = "knn" if mse_knn < mse_linear else "linear"
+        assert auto_exp.decode_method_effective_ == best
+
+    def test_auto_decoder_selects_valid_method(self):
+        X_train, _ = generate_exp3_data(n=120, seed=33)
+        explainer = EOTExplainer(
+            exp3_model,
+            X_train,
+            decode_method="auto",
+            random_state=0,
+        )
+        assert explainer.decode_method_effective_ in {"linear", "knn"}
+
 
 def simple_linear_model(X):
     """Simple linear model: y = x0 + 2*x1"""
     return X[:, 0] + 2 * X[:, 1]
 
 
+@pytest.mark.skipif(not HAS_TORCH, reason="FlowExplainer tests require torch")
 class TestFlowExplainer:
     """Test the FlowExplainer class."""
     
@@ -498,6 +634,7 @@ class TestFlowExplainer:
         assert corr > 0.5, f"Rank correlation should be positive: {corr}"
 
 
+@pytest.mark.skipif(not HAS_TORCH, reason="FlowExplainer tests require torch")
 class TestFlowVsOTExplainer:
     """Integration tests comparing FlowExplainer and OTExplainer."""
     

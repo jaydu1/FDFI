@@ -182,6 +182,28 @@ underlying distribution structure
    explainer = FlowExplainer(model.predict, X_background, fit_flow=False)
    explainer.set_flow(flow)
 
+Shared Diagnostics (OT / EOT / Flow)
+------------------------------------
+
+All disentangled explainers expose a shared ``diagnostics`` payload:
+
+- ``latent_independence_median`` with qualitative label
+- ``distribution_fidelity_mmd`` with qualitative label
+
+Lower is better for both metrics. Labels use the same thresholds across
+explainers:
+
+- ``GOOD``: dCor < 0.10, MMD < 0.05
+- ``MODERATE``: dCor < 0.25, MMD < 0.15
+- ``POOR``: otherwise
+
+.. code-block:: python
+
+   explainer = OTExplainer(model.predict, X_background)
+   diag = explainer.diagnostics
+   print(diag["latent_independence_median"], diag["latent_independence_label"])
+   print(diag["distribution_fidelity_mmd"], diag["distribution_fidelity_label"])
+
 TreeExplainer
 -------------
 

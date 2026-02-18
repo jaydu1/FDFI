@@ -28,15 +28,16 @@ Tutorial Overview
 
 :doc:`ot_explainer`
    Deep dive into the Gaussian OT explainer. Learn about the mathematical 
-   foundation, hyperparameters, and when to use it.
+   foundation, hyperparameters, shared diagnostics, and when to use it.
 
 :doc:`eot_explainer`
-   Master entropic optimal transport for non-Gaussian data. Covers adaptive 
-   epsilon, stochastic transport, and mixed data types.
+   Mixed-type-first EOT tutorial. Starts with active-feature screening using
+   Gower cost, then covers epsilon, stochastic transport, target choice, and
+   shared diagnostics.
 
 :doc:`flow_explainer`
    Master Flow-DFI with normalizing flows. Learn about CPI vs SCPI methods,
-   custom flow models, and when to choose FlowExplainer over OT methods.
+   custom flow models, shared diagnostics, and when to choose FlowExplainer.
 
 :doc:`confidence_intervals`
    Statistical inference with FDFI. Learn to compute confidence intervals, 

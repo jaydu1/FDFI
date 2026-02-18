@@ -63,6 +63,13 @@ Computes the Gower distance matrix for mixed-type data (continuous, binary,
 and categorical features). Used by ``EOTExplainer`` when ``cost_metric="gower"``
 or ``cost_metric="auto"``.
 
+Diagnostics Utilities
+---------------------
+
+.. autofunction:: fdfi.utils.compute_latent_independence
+
+.. autofunction:: fdfi.utils.compute_mmd
+
 Statistical Utilities
 ---------------------
 

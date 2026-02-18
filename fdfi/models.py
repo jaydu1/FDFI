@@ -188,7 +188,14 @@ class FlowMatchingModel:
             plt.grid(True)
             plt.show()
 
-    def sample_batch(self, x0, t_span=(0, 1)):
+    def sample_batch(
+        self,
+        x0,
+        t_span=(0, 1),
+        rtol=1e-3,
+        atol=1e-5,
+        method="dopri5",
+    ):
         self.model.eval()
 
         if isinstance(x0, np.ndarray):
@@ -204,7 +211,7 @@ class FlowMatchingModel:
             t_expand = torch.ones(x.size(0), 1, device=self.device) * t
             return self.model(x, t_expand)
 
-        out = odeint(odefunc, x0, t, rtol=1e-3, atol=1e-5, method='dopri5')
+        out = odeint(odefunc, x0, t, rtol=rtol, atol=atol, method=method)
         return out[-1]  
     
     def Jacobi_Batch(self, x_batch, t_span=(0, 1)):
@@ -247,6 +254,5 @@ class FlowMatchingModel:
         y1 = y_aug_out[-1]
         J1 = y1[self.dim:].reshape(self.dim, self.dim).detach().cpu().numpy()
         return J1
-
 
 
