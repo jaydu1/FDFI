@@ -2,14 +2,27 @@
 Tests for FDFI package initialization.
 """
 
+import re
+from pathlib import Path
+
 import fdfi
+
+
+def _version_from_pyproject() -> str:
+    """Read package version from pyproject.toml."""
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    content = pyproject_path.read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([^"]+)"\s*$', content, flags=re.MULTILINE)
+    if not match:
+        raise AssertionError("Could not parse version from pyproject.toml")
+    return match.group(1)
 
 
 def test_version():
     """Test that version is defined."""
     assert hasattr(fdfi, "__version__")
     assert isinstance(fdfi.__version__, str)
-    assert fdfi.__version__ == "0.0.1"
+    assert fdfi.__version__ == _version_from_pyproject()
 
 
 def test_package_imports():
