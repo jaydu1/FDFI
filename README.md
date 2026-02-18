@@ -2,6 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![PyPI](https://img.shields.io/pypi/v/fdfi?label=pypi&color=orange)](https://pypi.org/project/fdfi)
 
 A Python library for computing feature importance using disentangled methods, inspired by SHAP.
 

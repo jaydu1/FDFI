@@ -16,12 +16,19 @@
 
 ## [0.0.1] - 2026-01-31
 ### Added
-- OTExplainer (Gaussian optimal-transport DFI without cross-fitting).
-- EOTExplainer (entropic optimal-transport DFI without cross-fitting).
-- Exp3-based unit tests validating mean/variance aggregation for OT/EOT.
-- Standard error outputs (`se_X`, `se_Z`) for explainer uncertainty.
-- `conf_int` and `summary` methods for confidence intervals with variance-floor and margin adjustments.
-- EOT options for adaptive epsilon, stochastic transport sampling, and Gaussian/empirical targets.
+- **OTExplainer**: Gaussian optimal-transport DFI for feature importance computation
+- **EOTExplainer**: Entropic optimal-transport DFI with adaptive epsilon, stochastic transport sampling, and Gaussian/empirical targets
+- **FlowExplainer**: Flow-based DFI using normalizing flows for non-Gaussian data
+  - CPI (Conditional Permutation Importance) method
+  - SCPI (Sobol-CPI) method
+  - Multiple sampling methods: `resample`, `permutation`, `normal`, `condperm`
+- **TreeExplainer**, **LinearExplainer**, **KernelExplainer**: Classic explainer interfaces
+- **Visualization functions**: `summary_plot`, `waterfall_plot`, `force_plot`, `dependence_plot`
+- **Confidence intervals**: `conf_int` method for statistical inference with variance-floor and margin adjustments
+- Standard error outputs (`se_X`, `se_Z`) for explainer uncertainty
+- Comprehensive test suite with 50 tests
+- Tutorial notebooks: quickstart, OT, EOT, Flow explainers, confidence intervals
+- GitHub Actions workflows for CI/CD and PyPI publishing
 
 ### Changed
 - EOT/OT explainers now cache results for post-hoc CI computation via `conf_int`.

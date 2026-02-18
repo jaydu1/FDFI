@@ -30,6 +30,9 @@ requires-python = ">=3.8"
 dependencies = [
     "numpy>=1.20.0",
     "scipy>=1.7.0",
+    "scikit-learn>=1.0.0",
+    "matplotlib>=3.5.0",
+    "seaborn>=0.12.0",
 ]
 
 [project.optional-dependencies]
@@ -44,10 +47,7 @@ dev = [
 flow = [
     "torch>=2.0.0",
     "torchdiffeq>=0.2.3",
-]
-plots = [
-    "matplotlib>=3.5.0",
-    "seaborn>=0.12.0",
+    "tqdm>=4.60.0",
 ]
 docs = [
     "sphinx>=5.0.0",
@@ -55,7 +55,7 @@ docs = [
 ]
 all = [
     "dev",
-    "plots",
+    "flow",
     "docs",
 ]
 
