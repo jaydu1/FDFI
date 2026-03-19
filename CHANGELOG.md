@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.0.3] - 2026-03-19
+### Changed
+- **EOTExplainer rewritten**: semicontinuous forward map with analytical scaling $c_\varepsilon = \sqrt{1+\varepsilon}/(1+\varepsilon/2)$ and population backward attribution $W = L \cdot M_w$.
+- **Margin method `"auto"` is now the default** for `conf_int()`: uses log-scale gap clustering when $d < 30$ (where GMM is unreliable) and mixture (GMM) when $d \geq 30$.
+- Added `margin_method="gap"` option: finds the largest multiplicative gap in sorted phi values to separate null from signal features.
+- `conf_int()` now accepts `verbose=True` to print margin determination details (method chosen, gap location, ratio, or GMM parameters).
+- `conf_int()` return dict now includes `"margin_method"` key indicating which method was used.
+- `summary()` output now shows the margin method alongside the margin value.
+- Uncentered UEIF formula: $\phi_j = (y - \tilde{y}_{-j})^2$.
+
+### Fixed
+- Margin estimation no longer fails on low-dimensional data ($d < 30$): the old GMM-only approach would lump intermediate-valued relevant features into the null component, missing correlated predictive features.
+
 ## [0.0.2] - 2026-02-17
 ### Added
 - Shared diagnostics now emit qualitative labels (GOOD/MODERATE/POOR) with unified `[FDFI][DIAG]` logging for OT/EOT/Flow explainers.

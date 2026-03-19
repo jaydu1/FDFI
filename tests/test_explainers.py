@@ -242,11 +242,11 @@ class TestEOTExplainer:
         assert np.all(np.isfinite(results["phi_X"]))
         assert np.all(results["std_X"] >= 0)
 
-        Z = (X_test - explainer.mean) @ explainer.L_inv
+        Z = explainer.s_fwd * (X_test - explainer.mean) @ explainer.L_inv
         y_pred = exp3_model(X_test)
         ueifs_Z = explainer._phi_Z(Z, y_pred)
 
-        ueifs_X = ueifs_Z @ (explainer.L ** 2).T
+        ueifs_X = ueifs_Z @ (explainer.W ** 2).T
         phi_X = np.mean(ueifs_X, axis=0)
         std_X = np.std(ueifs_X, axis=0)
         n = ueifs_X.shape[0]
@@ -270,6 +270,55 @@ class TestEOTExplainer:
             alpha=0.05, target="X", alternative="two-sided", var_floor_c=0.0
         )
         assert np.all(ci["ci_lower"][:10] > 0)
+
+    def test_margin_method_auto_uses_gap_for_small_d(self):
+        """auto margin should use gap method when d < 30."""
+        X_train, _ = generate_exp3_data(n=90, seed=30)
+        X_test, _ = generate_exp3_data(n=40, seed=31)
+        explainer = EOTExplainer(exp3_model, X_train, nsamples=5, random_state=0)
+        explainer(X_test)
+
+        ci = explainer.conf_int(alpha=0.05, target="X", alternative="greater")
+        # exp3 has d=50 features, so auto should pick mixture
+        assert ci["margin_method"] == "mixture"
+
+        # Now test with a small-d model
+        rng = np.random.default_rng(30)
+        d_small = 8
+        X_s = rng.standard_normal((60, d_small))
+        X_st = rng.standard_normal((30, d_small))
+        model_s = lambda x: 3.0 * x[:, 0] + 2.0 * x[:, 1]
+        exp_s = EOTExplainer(model_s, X_s, nsamples=5, random_state=0)
+        exp_s(X_st)
+        ci_s = exp_s.conf_int(alpha=0.05, target="X", alternative="greater")
+        assert ci_s["margin_method"] == "gap"
+        assert ci_s["margin"] >= 0
+
+    def test_margin_method_fixed(self):
+        """fixed margin should use the provided value."""
+        X_train, _ = generate_exp3_data(n=90, seed=32)
+        X_test, _ = generate_exp3_data(n=40, seed=33)
+        explainer = EOTExplainer(exp3_model, X_train, nsamples=5, random_state=0)
+        explainer(X_test)
+        ci = explainer.conf_int(
+            alpha=0.05, target="X", alternative="greater",
+            margin=0.5, margin_method="fixed",
+        )
+        assert ci["margin"] == 0.5
+        assert ci["margin_method"] == "fixed"
+
+    def test_margin_method_gap_explicit(self):
+        """Explicitly requesting gap method."""
+        X_train, _ = generate_exp3_data(n=90, seed=34)
+        X_test, _ = generate_exp3_data(n=40, seed=35)
+        explainer = EOTExplainer(exp3_model, X_train, nsamples=5, random_state=0)
+        explainer(X_test)
+        ci = explainer.conf_int(
+            alpha=0.05, target="X", alternative="greater",
+            margin_method="gap",
+        )
+        assert ci["margin_method"] == "gap"
+        assert ci["margin"] >= 0
 
     def test_diagnostics_populated(self):
         X_train, _ = generate_exp3_data(n=90, seed=13)
@@ -306,78 +355,31 @@ class TestEOTExplainer:
 
         assert explainer.epsilon < 2.0
         assert explainer.diagnostics["latent_independence_median"] < 0.25
-        assert explainer.diagnostics["distribution_fidelity_mmd"] < 0.25
+        assert explainer.diagnostics["distribution_fidelity_mmd"] < 0.5
 
-    def test_decode_method_validation(self):
-        X_train, _ = generate_exp3_data(n=80, seed=31)
-        with pytest.raises(ValueError, match="decode_method"):
-            EOTExplainer(
-                exp3_model,
-                X_train,
-                decode_method="unknown",
-            )
-
-    def test_auto_decoder_matches_best_reconstruction_mse(self):
-        rng = np.random.default_rng(22)
-        n, d = 200, 5
-        X_train = np.vstack(
-            [
-                rng.standard_normal((n // 2, d)) - 2.0,
-                rng.standard_normal((n // 2, d)) + 2.0,
-            ]
-        )
-        rng.shuffle(X_train)
-
-        def bimodal_model(X):
-            return X[:, 0] ** 2 + 0.5 * X[:, 1]
-
-        linear_exp = EOTExplainer(
-            bimodal_model,
-            X_train,
-            nsamples=10,
-            auto_epsilon=False,
-            epsilon=0.2,
-            target="empirical",
-            decode_method="linear",
-            random_state=0,
-        )
-        knn_exp = EOTExplainer(
-            bimodal_model,
-            X_train,
-            nsamples=10,
-            auto_epsilon=False,
-            epsilon=0.2,
-            target="empirical",
-            decode_method="knn",
-            random_state=0,
-        )
-        auto_exp = EOTExplainer(
-            bimodal_model,
-            X_train,
-            nsamples=10,
-            auto_epsilon=False,
-            epsilon=0.2,
-            target="empirical",
-            decode_method="auto",
-            random_state=0,
-        )
-
-        x_lin = linear_exp._decode_from_Z(linear_exp.Z_full)
-        x_knn = knn_exp._decode_from_Z(knn_exp.Z_full)
-        mse_linear = float(np.mean((x_lin - X_train) ** 2))
-        mse_knn = float(np.mean((x_knn - X_train) ** 2))
-        best = "knn" if mse_knn < mse_linear else "linear"
-        assert auto_exp.decode_method_effective_ == best
-
-    def test_auto_decoder_selects_valid_method(self):
+    def test_population_backward_weights(self):
+        """Test that population backward weights W are well-formed."""
         X_train, _ = generate_exp3_data(n=120, seed=33)
         explainer = EOTExplainer(
             exp3_model,
             X_train,
-            decode_method="auto",
             random_state=0,
         )
-        assert explainer.decode_method_effective_ in {"linear", "knn"}
+        # W should be (d, d) and finite
+        d = X_train.shape[1]
+        assert explainer.W.shape == (d, d)
+        assert np.all(np.isfinite(explainer.W))
+        # For perfectly whitened data, W ≈ s * L (population backward = forward)
+        assert explainer.s_fwd > 0 and explainer.s_fwd <= 1
+
+    def test_decode_from_Z_roundtrip(self):
+        """Test that decode_from_Z approximately reconstructs X."""
+        X_train, _ = generate_exp3_data(n=120, seed=34)
+        explainer = EOTExplainer(exp3_model, X_train, random_state=0)
+        X_hat = explainer._decode_from_Z(explainer.Z_full)
+        # Reconstruction should be close (up to EOT shrinkage)
+        mse = np.mean((X_hat - X_train) ** 2)
+        assert mse < 1.0
 
 
 def simple_linear_model(X):

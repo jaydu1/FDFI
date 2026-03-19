@@ -133,6 +133,9 @@ class Explainer:
 
         return np.sqrt(se_raw**2 + floor**2)
 
+    # Minimum number of features for which GMM-based margin is reliable.
+    _MARGIN_GMM_MIN_D = 30
+
     def conf_int(
         self,
         alpha: float = 0.05,
@@ -141,9 +144,10 @@ class Explainer:
         var_floor_method: str = "mixture",
         var_floor_quantile: float = 0.95,
         margin: float = 0.0,
-        margin_method: str = "mixture",
+        margin_method: str = "auto",
         margin_quantile: float = 0.95,
         alternative: str = "two-sided",
+        verbose: bool = False,
     ) -> dict:
         if self._last_results is None:
             raise ValueError("Run the explainer first to compute scores.")
@@ -162,11 +166,10 @@ class Explainer:
             var_floor_quantile=var_floor_quantile,
         )
 
-        if margin_method == "mixture":
-            self._margin_mixture = TwoComponentMixture().fit(phi_hat)
-            margin = max(self._margin_mixture.quantile(margin_quantile, "smaller"), 0)
-        else:
-            self._margin_mixture = None
+        d = len(phi_hat)
+        margin, margin_method_used = self._compute_margin(
+            phi_hat, margin, margin_method, margin_quantile, d, verbose,
+        )
 
         with np.errstate(divide="ignore", invalid="ignore"):
             if alternative == "greater":
@@ -205,8 +208,91 @@ class Explainer:
             "reject_null": reject_null,
             "pvalue": pvalues,
             "margin": margin,
+            "margin_method": margin_method_used,
             "alternative": alternative,
         }
+
+    # ------------------------------------------------------------------
+    # Margin estimation helpers
+    # ------------------------------------------------------------------
+
+    def _compute_margin(
+        self,
+        phi_hat: np.ndarray,
+        margin: float,
+        margin_method: str,
+        margin_quantile: float,
+        d: int,
+        verbose: bool,
+    ) -> tuple:
+        """Return (margin_value, method_used_string)."""
+
+        if margin_method == "fixed":
+            self._margin_mixture = None
+            if verbose:
+                print(f"[margin] method=fixed, margin={margin:.4f}")
+            return margin, "fixed"
+
+        if margin_method == "auto":
+            if d < self._MARGIN_GMM_MIN_D:
+                method = "gap"
+                reason = f"d={d} < {self._MARGIN_GMM_MIN_D}"
+            else:
+                method = "mixture"
+                reason = f"d={d} >= {self._MARGIN_GMM_MIN_D}"
+            if verbose:
+                print(f"[margin] method=auto → {method} ({reason})")
+        else:
+            method = margin_method
+
+        if method == "gap":
+            margin = self._gap_margin(phi_hat, verbose)
+            self._margin_mixture = None
+            return margin, "gap"
+        elif method == "mixture":
+            self._margin_mixture = TwoComponentMixture().fit(phi_hat)
+            margin = max(
+                self._margin_mixture.quantile(margin_quantile, "smaller"), 0
+            )
+            if verbose:
+                print(
+                    f"[margin] mixture: means={self._margin_mixture.means_.round(4)}, "
+                    f"weights={self._margin_mixture.weights_.round(3)}, "
+                    f"margin={margin:.4f}"
+                )
+            return margin, "mixture"
+        else:
+            raise ValueError(
+                f"margin_method must be 'auto', 'mixture', 'gap', or 'fixed', "
+                f"got '{margin_method}'"
+            )
+
+    @staticmethod
+    def _gap_margin(phi_hat: np.ndarray, verbose: bool = False) -> float:
+        """Largest-gap margin: cluster null vs signal by the biggest
+        multiplicative jump (log-scale gap).
+
+        Uses log-transformed phi values so that a jump from 0.03 → 0.57
+        (~19×) dominates over a jump from 3.6 → 6.2 (~1.7×).
+        The margin is set to the value at the top of the lower cluster.
+        """
+        vals = np.sort(phi_hat)
+        if len(vals) < 2:
+            return 0.0
+        # Work in log-space; shift by a small fraction to handle zeros
+        floor = max(vals[vals > 0].min() * 1e-2, 1e-12) if np.any(vals > 0) else 1e-12
+        log_vals = np.log(np.maximum(vals, floor))
+        log_gaps = np.diff(log_vals)
+        k = int(np.argmax(log_gaps))      # index of the lower-side element
+        margin = float(vals[k])           # top of the null cluster
+        if verbose:
+            print(
+                f"[margin] gap: sorted phi range [{vals[0]:.4f}, {vals[-1]:.4f}], "
+                f"largest log-gap between rank {k} ({vals[k]:.4f}) and {k+1} "
+                f"({vals[k+1]:.4f}), ratio={vals[k+1]/(vals[k]+1e-15):.1f}x, "
+                f"margin={margin:.4f}"
+            )
+        return margin
 
     def summary(self, alpha: float = 0.05, print_output: bool = True, **kwargs) -> str:
         results = self.conf_int(alpha=alpha, **kwargs)
@@ -221,6 +307,9 @@ class Explainer:
         lines.append(f"Number of features: {len(results['phi_hat'])}")
         lines.append(f"Significance level: {alpha}")
         lines.append(f"Alternative: {results['alternative']}")
+        margin_method_str = results.get("margin_method", "")
+        if margin_method_str:
+            lines.append(f"Margin method: {margin_method_str}")
         if results["margin"] > 0:
             lines.append(f"Practical margin: {results['margin']:.4f}")
         lines.append("-" * 78)
@@ -749,18 +838,55 @@ class OTExplainer(Explainer):
 
 class EOTExplainer(Explainer):
     """
-    Entropic optimal-transport DFI explainer (no cross-fitting).
+    Entropic optimal-transport DFI explainer using semicontinuous transport
+    and population backward attribution.
 
-    Fits an entropic transport on background data, then uses it to
-    resample Z for counterfactual evaluation with the provided model.
-    Supports adaptive epsilon, stochastic transport sampling, and
-    Gaussian/empirical targets.
+    Uses the population EOT coupling between the empirical source and
+    continuous N(0, I) target.  The forward map is analytical:
 
-    Notable options:
-      - auto_epsilon: enable median-distance heuristic
-      - stochastic_transport: sample from k(z|x) instead of barycentric map
-      - target: "gaussian" or "empirical" transport target
-      - decode_method: "auto" (default), "knn", or "linear" latent decoder
+        Z = c_ε · X_whitened,   c_ε = √(1 + ε) / (1 + ε/2)
+
+    Backward attribution uses the best linear projection:
+
+        E[X_whitened | Z] = M_w · Z
+
+    where M_w = E_π[ZZ^T]^{-1} E_π[ZX_w^T] is computed analytically
+    from the semicontinuous coupling moments.  This gives the weight
+    matrix  W = L @ M_w  used for the decomposition:
+
+        φ_X_j = Σ_k W[j,k]² · φ_Z_k
+
+    Feature importance is measured via the uncentered efficient influence
+    function (UEIF):
+
+        UEIF_{i,j} = (Y_i - ŷ_{-j,i})²
+
+    where ŷ_{-j} averages predictions over counterfactual resamples of
+    feature j.
+
+    Parameters
+    ----------
+    model : callable
+        The model to explain.  Takes (n, d) array, returns (n,) predictions.
+    data : numpy.ndarray
+        Background data for whitening and resampling.  Shape (n, d).
+    nsamples : int, default=50
+        Number of Monte Carlo samples per feature for counterfactual
+        resampling.
+    epsilon : float, default=0.1
+        EOT regularization parameter.  Smaller ε → closer to exact OT;
+        larger ε → more Gaussian shrinkage.
+    auto_epsilon : bool, default=False
+        If True, set ε from a median-distance heuristic in whitened space.
+    sampling_method : str, default='resample'
+        How to draw counterfactual Z_j values:
+        - 'resample': sample from the background Z pool
+        - 'permutation': permute within the test set
+        - 'normal': sample from N(0, 1)
+    random_state : int, default=0
+        Random seed for reproducibility.
+    **kwargs : dict
+        Extra arguments forwarded to the base Explainer.
     """
     def __init__(
         self,
@@ -769,24 +895,7 @@ class EOTExplainer(Explainer):
         nsamples: int = 50,
         epsilon: float = 0.1,
         auto_epsilon: bool = False,
-        target: str = "gaussian",
-        transport_type: str = "entropic",
-        alpha: float = 0.5,
-        n_iter: int = 100,
-        tol: float = 1e-6,
-        cost_metric: str = "sqeuclidean",
-        cost_fn: Optional[Callable[..., np.ndarray]] = None,
-        cost_kwargs: Optional[dict] = None,
-        categorical_threshold: int = 10,
-        feature_types: Optional[np.ndarray] = None,
-        feature_weights: Optional[np.ndarray] = None,
         sampling_method: str = "resample",
-        stochastic_transport: bool = False,
-        n_transport_samples: int = 10,
-        decode_method: str = "auto",
-        decode_n_neighbors: int = 25,
-        decode_weights: Union[str, Callable] = "distance",
-        decode_leave_one_out: bool = True,
         random_state: int = 0,
         **kwargs: Any
     ):
@@ -794,34 +903,11 @@ class EOTExplainer(Explainer):
         self.nsamples = nsamples
         self.epsilon = epsilon
         self.auto_epsilon = auto_epsilon
-        self.target = target
-        self.transport_type = transport_type
-        self.alpha = alpha
-        self.n_iter = n_iter
-        self.tol = tol
-        self.cost_metric = cost_metric
-        self.cost_fn = cost_fn
-        self.cost_kwargs = cost_kwargs
-        self.categorical_threshold = categorical_threshold
-        self.feature_types = feature_types
-        self.feature_weights = feature_weights
         self.sampling_method = sampling_method
-        self.stochastic_transport = stochastic_transport
-        self.n_transport_samples = n_transport_samples
-        self.decode_method = decode_method
-        self.decode_n_neighbors = decode_n_neighbors
-        self.decode_weights = decode_weights
-        self.decode_leave_one_out = decode_leave_one_out
-        self.decode_method_effective_ = "linear"
         self.random_state = random_state
         self.regularize = kwargs.get("regularize", 1e-6)
-        self.transport_plan_ = None
-        self.Z_target_ = None
-        self.Z_gauss_ = None
-        self._decode_model = None
-        self.X_centered_ = None
-        self.detected_types_ = None
 
+        # ── Gaussian whitening ───────────────────────────────────────────
         self.mean = np.mean(data, axis=0, keepdims=True)
         self.cov = np.cov(data - self.mean, rowvar=False, ddof=0)
         self.cov = (self.cov + self.cov.T) / 2
@@ -833,93 +919,97 @@ class EOTExplainer(Explainer):
         self.L_inv = eigenvecs @ np.diag(eigenvals**-0.5) @ eigenvecs.T
 
         X_centered = data - self.mean
-        self.X_centered_ = X_centered
-        Z_gauss = X_centered @ self.L_inv
-        self.Z_gauss_ = Z_gauss
+        X_whitened = X_centered @ self.L_inv
+
         if self.auto_epsilon:
             self.epsilon = self._auto_epsilon(X_centered)
-        Z_entropic = self._fit_entropic_Z(X_centered, Z_gauss)
 
-        if self.transport_type == "entropic":
-            self.Z_fit_ = Z_entropic
-        elif self.transport_type == "semiparametric":
-            self.Z_fit_ = (1.0 - self.alpha) * Z_gauss + self.alpha * Z_entropic
+        # ── Semicontinuous population forward map ────────────────────────
+        # Analytical scaling for Gaussian source → N(0,I) target:
+        #   c_ε = √(1 + ε) / (1 + ε/2)
+        # At ε=0 this gives c=1 (identity); as ε→∞ it approaches 0.
+        eps = self.epsilon
+        if eps == 0:
+            self.s_fwd = 1.0
         else:
-            raise ValueError(f"Unknown transport_type: {self.transport_type}")
+            self.s_fwd = np.sqrt(1.0 + eps) / (1.0 + eps / 2.0)
+        self.L_z = self.s_fwd * self.L
 
-        self._build_decoder()
-        self.Z_full = self.Z_fit_
+        # ── Population backward attribution weights ──────────────────────
+        # Under the semicontinuous coupling Z|X ~ N(c_ε·X_w, σ²·I)
+        # where σ² = 1 - c_ε²  (variance complement for unit marginals).
+        # E_π[ZX_w^T] = c_ε · Σ̂_w
+        # E_π[ZZ^T]   = σ² · I + c_ε² · Σ̂_w
+        # M_w = E_π[ZZ^T]^{-1} E_π[ZX_w^T]  (best linear projection)
+        n, d = X_whitened.shape
+        Sigma_hat = (X_whitened.T @ X_whitened) / n
+        c = self.s_fwd
+        sigma_sq = 1.0 - c ** 2
+        Ezz = sigma_sq * np.eye(d) + c ** 2 * Sigma_hat
+        Ezx = c * Sigma_hat
+        M_w = np.linalg.solve(Ezz, Ezx)
+        self.W = self.L @ M_w
+
+        # ── Resampling pool ──────────────────────────────────────────────
+        self.Z_full = self.s_fwd * X_whitened
         self._compute_diagnostics(report_title="EOTExplainer")
 
-    def __call__(self, X: np.ndarray, **kwargs: Any) -> np.ndarray:
+    def __call__(self, X: np.ndarray, **kwargs: Any) -> dict:
         n, d = X.shape
-        Z = (X - self.mean) @ self.L_inv
+        Z = self.s_fwd * (X - self.mean) @ self.L_inv
         y_pred = self.model(X)
 
         ueifs_Z = self._phi_Z(Z, y_pred)
+        ueifs_X = ueifs_Z @ (self.W ** 2).T
 
-        H = self.L ** 2
-        ueifs_X = ueifs_Z @ H.T
-
-        n = ueifs_X.shape[0]
         ddof = 1 if n > 1 else 0
-        phi_X = np.mean(ueifs_X, axis=0)
-        std_X = np.std(ueifs_X, axis=0)
-        se_X = np.std(ueifs_X, axis=0, ddof=ddof) / np.sqrt(n)
-
-        phi_Z = np.mean(ueifs_Z, axis=0)
-        std_Z = np.std(ueifs_Z, axis=0)
-        se_Z = np.std(ueifs_Z, axis=0, ddof=ddof) / np.sqrt(n)
-
         results = {
-            "phi_X": phi_X,
-            "std_X": std_X,
-            "se_X": se_X,
-            "phi_Z": phi_Z,
-            "std_Z": std_Z,
-            "se_Z": se_Z,
+            "phi_X": np.mean(ueifs_X, axis=0),
+            "std_X": np.std(ueifs_X, axis=0),
+            "se_X": np.std(ueifs_X, axis=0, ddof=ddof) / np.sqrt(n),
+            "phi_Z": np.mean(ueifs_Z, axis=0),
+            "std_Z": np.std(ueifs_Z, axis=0),
+            "se_Z": np.std(ueifs_Z, axis=0, ddof=ddof) / np.sqrt(n),
         }
         self._cache_results(results, n)
         return results
 
     def _phi_Z(self, Z: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+        """Compute per-sample uncentered UEIF in Z-space via counterfactual resampling.
+
+        For each feature j, replaces Z_j with independent draws and measures
+        the squared prediction shift:
+
+            UEIF_{i,j} = (y_i - ȳ_{-j,i})²
+
+        where ȳ_{-j} is the mean prediction over counterfactual resamples
+        of feature j.
+        """
         n, d = Z.shape
         ueifs_Z = np.zeros((n, d))
+        L_z = self.L_z
 
-        def compute_y_perm(j: int, rng: np.random.Generator, Z_pool: np.ndarray) -> np.ndarray:
+        for j in range(d):
+            rng = np.random.default_rng(self.random_state + j)
             Z_tilde = np.tile(Z[None, :, :], (self.nsamples, 1, 1))
 
             if self.sampling_method == "resample":
-                resample_idx = rng.choice(
-                    Z_pool.shape[0], size=(self.nsamples, n), replace=True
+                idx = rng.choice(
+                    self.Z_full.shape[0], size=(self.nsamples, n), replace=True
                 )
-                Z_tilde[:, :, j] = Z_pool[resample_idx, j]
+                Z_tilde[:, :, j] = self.Z_full[idx, j]
             elif self.sampling_method == "permutation":
-                perm_idx = np.array([rng.permutation(n) for _ in range(self.nsamples)])
-                Z_tilde[:, :, j] = Z[perm_idx, j]
+                perm = np.array([rng.permutation(n) for _ in range(self.nsamples)])
+                Z_tilde[:, :, j] = Z[perm, j]
             elif self.sampling_method == "normal":
                 Z_tilde[:, :, j] = rng.normal(0.0, 1.0, size=(self.nsamples, n))
             else:
                 raise ValueError(f"Unknown sampling_method: {self.sampling_method}")
 
-            Z_tilde_flat = Z_tilde.reshape(-1, d)
-            X_tilde_flat = Z_tilde_flat @ self.L + self.mean
-
-            y_tilde_flat = self.model(X_tilde_flat)
-            return y_tilde_flat.reshape(self.nsamples, n).mean(axis=0)
-
-        for j in range(d):
-            rng = np.random.default_rng(self.random_state + j)
-            if self.sampling_method == "resample" and self.stochastic_transport:
-                all_y_perm = []
-                for _ in range(self.n_transport_samples):
-                    Z_pool = self._sample_transport_pool(rng)
-                    all_y_perm.append(compute_y_perm(j, rng, Z_pool))
-                y_perm = np.mean(all_y_perm, axis=0)
-            else:
-                y_perm = compute_y_perm(j, rng, self.Z_fit_)
-
-            ueifs_Z[:, j] = (y_pred - y_perm) ** 2
+            Z_flat = Z_tilde.reshape(-1, d)
+            X_tilde = Z_flat @ L_z + self.mean
+            y_tilde = self.model(X_tilde).reshape(self.nsamples, n).mean(axis=0)
+            ueifs_Z[:, j] = (y_pred - y_tilde) ** 2
 
         return ueifs_Z
 
@@ -927,9 +1017,8 @@ class EOTExplainer(Explainer):
         """
         Auto-tune epsilon from latent geometry.
 
-        We estimate pairwise distances in Gaussian-whitened latent space and use
-        a conservative shrinkage factor to avoid over-smoothing transport plans
-        on multi-modal data.
+        Estimates pairwise distances in Gaussian-whitened latent space and
+        uses a conservative shrinkage factor to avoid over-smoothing.
         """
         if X_centered.shape[0] < 2:
             return self.epsilon
@@ -948,206 +1037,9 @@ class EOTExplainer(Explainer):
         eps = 0.25 * (median_sq_dist / Z_ref.shape[1])
         return max(eps, 1e-3)
 
-    def _make_target(self, Z_gauss: np.ndarray) -> np.ndarray:
-        rng = np.random.default_rng(self.random_state)
-        n, d = Z_gauss.shape
-        if self.target == "gaussian":
-            return rng.standard_normal((n, d))
-        if self.target == "empirical":
-            perm = rng.permutation(n)
-            return Z_gauss[perm]
-        raise ValueError(f"Unknown target: {self.target}")
-
-    def _fit_entropic_Z(self, X_centered: np.ndarray, Z_gauss: np.ndarray) -> np.ndarray:
-        Z_target = self._make_target(Z_gauss)
-        C = self._compute_cost_matrix(X_centered, Z_target)
-        P = self._sinkhorn(C)
-        self.Z_target_ = Z_target
-        self.transport_plan_ = P
-        return P @ Z_target
-
-    def _compute_cost_matrix(self, X: np.ndarray, Z: np.ndarray) -> np.ndarray:
-        if self.cost_fn is not None:
-            kwargs = self.cost_kwargs or {}
-            return self.cost_fn(X, Z, **kwargs)
-
-        if self.cost_metric in ("auto", "gower"):
-            detected = detect_feature_types(
-                X,
-                categorical_threshold=self.categorical_threshold,
-                feature_types=self.feature_types,
-            )
-            self.detected_types_ = detected
-            types = detected["types"]
-            ranges = detected["ranges"]
-            if self.cost_metric == "auto":
-                if np.all(types == "continuous"):
-                    return cdist(X, Z, metric="sqeuclidean")
-            return gower_cost_matrix(
-                X,
-                Z,
-                feature_types=types,
-                feature_ranges=ranges,
-                feature_weights=self.feature_weights,
-            )
-
-        if self.cost_metric == "sqeuclidean":
-            return cdist(X, Z, metric="sqeuclidean")
-
-        return cdist(X, Z, metric=self.cost_metric)
-
-    def _sample_transport_pool(self, rng: np.random.Generator) -> np.ndarray:
-        if self.transport_plan_ is None or self.Z_target_ is None:
-            return self.Z_fit_
-
-        P = self.transport_plan_
-        n, m = P.shape
-        d = self.Z_target_.shape[1]
-        Z_entropic = np.zeros((n, d))
-
-        for i in range(n):
-            probs = P[i]
-            if probs.sum() <= 0:
-                probs = np.ones(m) / m
-            else:
-                probs = probs / probs.sum()
-            idx = rng.choice(m, p=probs)
-            Z_entropic[i] = self.Z_target_[idx]
-
-        if self.transport_type == "semiparametric" and self.Z_gauss_ is not None:
-            return (1.0 - self.alpha) * self.Z_gauss_ + self.alpha * Z_entropic
-        return Z_entropic
-
-    def _build_decoder(self) -> None:
-        """Build optional nonlinear decoder from latent Z to original X."""
-        if self.decode_method == "linear":
-            self.decode_method_effective_ = "linear"
-            self._decode_model = None
-            return
-        if self.decode_method not in ("knn", "auto"):
-            raise ValueError(
-                "decode_method must be 'auto', 'linear', or 'knn'"
-            )
-        try:
-            from sklearn.neighbors import NearestNeighbors
-        except ImportError as exc:
-            raise ImportError(
-                "decode_method='knn' requires scikit-learn."
-            ) from exc
-
-        n_neighbors = int(max(1, min(self.decode_n_neighbors, self.Z_fit_.shape[0])))
-        self._decode_model = NearestNeighbors(n_neighbors=n_neighbors)
-        self._decode_model.fit(self.Z_fit_)
-
-        if self.decode_method == "knn":
-            self.decode_method_effective_ = "knn"
-            return
-
-        # Auto-select the decoder with lower reconstruction MSE on training pairs.
-        X_linear = self.Z_fit_ @ self.L
-        mse_linear = float(np.mean((self.X_centered_ - X_linear) ** 2))
-        X_knn = self._predict_knn_centered(self.Z_fit_)
-        mse_knn = float(np.mean((self.X_centered_ - X_knn) ** 2))
-
-        if mse_knn < mse_linear:
-            self.decode_method_effective_ = "knn"
-        else:
-            self.decode_method_effective_ = "linear"
-            self._decode_model = None
-
-    def _predict_knn_centered(self, Z_arr: np.ndarray) -> np.ndarray:
-        """Predict centered X from Z via the configured kNN decoder."""
-        if self._decode_model is None:
-            raise RuntimeError("kNN decoder is not initialized.")
-
-        n_train = self.Z_fit_.shape[0]
-        k = int(max(1, min(self.decode_n_neighbors, n_train)))
-        k_query = min(
-            n_train,
-            k + 1 if self.decode_leave_one_out and n_train > 1 else k,
-        )
-        dists, nbr_idx = self._decode_model.kneighbors(
-            Z_arr, n_neighbors=k_query, return_distance=True
-        )
-
-        X_centered_hat = np.zeros((Z_arr.shape[0], self.X_centered_.shape[1]))
-        for i in range(Z_arr.shape[0]):
-            row_idx = nbr_idx[i]
-            row_dist = dists[i]
-
-            if (
-                self.decode_leave_one_out
-                and row_dist.size > 1
-                and row_dist[0] <= 1e-12
-            ):
-                row_idx = row_idx[1:]
-                row_dist = row_dist[1:]
-
-            row_idx = row_idx[:k]
-            row_dist = row_dist[:k]
-            X_neighbors = self.X_centered_[row_idx]
-
-            if callable(self.decode_weights):
-                w = np.asarray(self.decode_weights(row_dist))
-                if w.shape != row_dist.shape:
-                    raise ValueError(
-                        "decode_weights callable must return shape (n_neighbors,)."
-                    )
-                w = np.maximum(w, 0.0)
-                if w.sum() <= 0:
-                    w = np.ones_like(row_dist)
-                w = w / w.sum()
-                X_centered_hat[i] = w @ X_neighbors
-            elif self.decode_weights == "uniform":
-                X_centered_hat[i] = X_neighbors.mean(axis=0)
-            elif self.decode_weights == "distance":
-                w = 1.0 / np.maximum(row_dist, 1e-12)
-                w = w / w.sum()
-                X_centered_hat[i] = w @ X_neighbors
-            else:
-                raise ValueError(
-                    "decode_weights must be 'uniform', 'distance', or a callable."
-                )
-        return X_centered_hat
-
-    def _sinkhorn(self, C: np.ndarray) -> np.ndarray:
-        n, m = C.shape
-        a = np.ones(n) / n
-        b = np.ones(m) / m
-
-        K = np.exp(-C / self.epsilon)
-        K = np.maximum(K, 1e-300)
-
-        u = np.ones(n)
-        v = np.ones(m)
-
-        for _ in range(self.n_iter):
-            u_prev = u.copy()
-            u = a / (K @ v + 1e-300)
-            v = b / (K.T @ u + 1e-300)
-            if np.max(np.abs(u - u_prev)) < self.tol:
-                break
-
-        P = np.diag(u) @ K @ np.diag(v)
-        row_sums = P.sum(axis=1, keepdims=True)
-        return P / np.maximum(row_sums, 1e-300)
-
     def _decode_from_Z(self, Z: np.ndarray) -> np.ndarray:
-        """
-        Decode Z to X.
-
-        - linear: Gaussian reference map X = ZL + mean
-        - knn: local nonlinear inverse map fitted on (Z_fit_, X_centered)
-        """
-        Z_arr = np.asarray(Z)
-        if Z_arr.ndim != 2:
-            raise ValueError("Z must be a 2D array.")
-
-        if self.decode_method_effective_ == "knn" and self._decode_model is not None:
-            X_centered_hat = self._predict_knn_centered(Z_arr)
-        else:
-            X_centered_hat = Z_arr @ self.L
-        return X_centered_hat + self.mean
+        """Decode Z to X using the population coupling: E[X | Z] ≈ Z @ L_z + mean."""
+        return np.asarray(Z) @ self.L_z + self.mean
 
 
 DFIExplainer = OTExplainer
