@@ -77,6 +77,8 @@ class Explainer:
         self._var_floor_mixture = None
         self._margin_mixture = None
         self._var_floor_value = None
+        self.ueifs_X = None
+        self.ueifs_Z = None
         self.verbose = kwargs.get("verbose", False)
         self.diagnostics = None
         self.compute_diagnostics = kwargs.get("compute_diagnostics", True)
@@ -297,6 +299,112 @@ class Explainer:
     def summary(self, alpha: float = 0.05, print_output: bool = True, **kwargs) -> str:
         results = self.conf_int(alpha=alpha, **kwargs)
         return self._format_summary(results, alpha, print_output)
+
+    # ------------------------------------------------------------------
+    # Group importance
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_groups(groups, d: int) -> dict:
+        """Normalize group input to ``{group_name: ndarray of feature indices}``."""
+        if isinstance(groups, dict):
+            return {k: np.asarray(v, dtype=int) for k, v in groups.items()}
+        if isinstance(groups, np.ndarray) and groups.ndim == 1:
+            unique_labels = np.unique(groups)
+            return {label: np.where(groups == label)[0] for label in unique_labels}
+        # pandas DataFrame (binary indicator matrix, features × groups)
+        if hasattr(groups, "iloc"):
+            return {
+                col: np.where(groups[col].values > 0)[0]
+                for col in groups.columns
+            }
+        raise TypeError(
+            f"groups must be dict, 1D array, or DataFrame, got {type(groups)}"
+        )
+
+    def group_importance(
+        self,
+        groups: Union[dict, np.ndarray, Any],
+        target: str = "X",
+        threshold_null: bool = True,
+        se_adjustment: float = 0.1,
+        alpha: float = 0.05,
+    ) -> dict:
+        """Compute group-level feature importance with uncertainty.
+
+        Parameters
+        ----------
+        groups : dict, numpy.ndarray, or pandas.DataFrame
+            Group assignment for features. Accepts:
+
+            - ``dict``: ``{group_name: [feature_indices]}``
+            - ``numpy.ndarray``: 1-D array of length *d* with group labels.
+            - ``pandas.DataFrame``: binary indicator matrix (features × groups).
+        target : str, default='X'
+            Which space to aggregate: ``'X'`` or ``'Z'``.
+        threshold_null : bool, default=True
+            Zero out per-feature UEIFs with negative mean before summing.
+        se_adjustment : float, default=0.1
+            Finite-sample SE correction constant.  Set to 0.0 to disable.
+        alpha : float, default=0.05
+            Significance level used for the SE correction quantile.
+
+        Returns
+        -------
+        dict
+            ``'groups'``, ``'importance'``, ``'se'``, ``'zscore'``, ``'pvalue'``
+            — each an array of length *G* (number of groups).
+        """
+        if target == "Z":
+            ueifs = self.ueifs_Z
+        else:
+            ueifs = self.ueifs_X
+        if ueifs is None:
+            raise ValueError(
+                "Per-sample UEIFs not available. Run the explainer first, "
+                "e.g., explainer(X)."
+            )
+
+        n = ueifs.shape[0]
+        d = ueifs.shape[1]
+        group_dict = self._normalize_groups(groups, d)
+
+        z_alpha = stats.norm.ppf(1 - alpha / 2)
+        correction = se_adjustment / np.sqrt(n) / z_alpha if se_adjustment > 0 else 0.0
+
+        group_names = []
+        importances = []
+        ses = []
+        zscores = []
+        pvalues = []
+
+        for name, indices in group_dict.items():
+            ueifs_g = ueifs[:, indices].copy()
+            if threshold_null:
+                feature_means = ueifs_g.mean(axis=0)
+                ueifs_g[:, feature_means < 0] = 0
+            grouped = ueifs_g.sum(axis=1)  # (n,)
+
+            fi = grouped.mean()
+            sigma = grouped.std(ddof=1)
+            se = np.maximum(sigma / np.sqrt(n), 1e-12) + correction
+
+            z = fi / se if se > 0 else np.nan
+            p = 1 - stats.norm.cdf(z) if np.isfinite(z) else np.nan
+
+            group_names.append(name)
+            importances.append(fi)
+            ses.append(se)
+            zscores.append(z)
+            pvalues.append(p)
+
+        return {
+            "groups": np.array(group_names),
+            "importance": np.array(importances, dtype=float),
+            "se": np.array(ses, dtype=float),
+            "zscore": np.array(zscores, dtype=float),
+            "pvalue": np.array(pvalues, dtype=float),
+        }
 
     def _format_summary(self, results: dict, alpha: float, print_output: bool = True) -> str:
         lines = []
@@ -774,6 +882,10 @@ class OTExplainer(Explainer):
         # Map latent-space UEIFs back to original X-space per-sample
         ueifs_X = ueifs_Z @ H.T
 
+        # Store per-sample UEIFs for group_importance()
+        self.ueifs_X = ueifs_X
+        self.ueifs_Z = ueifs_Z
+
         # Aggregate to get mean importance and uncertainty (std) across samples
         n = ueifs_X.shape[0]
         ddof = 1 if n > 1 else 0
@@ -961,6 +1073,10 @@ class EOTExplainer(Explainer):
 
         ueifs_Z = self._phi_Z(Z, y_pred)
         ueifs_X = ueifs_Z @ (self.W ** 2).T
+
+        # Store per-sample UEIFs for group_importance()
+        self.ueifs_X = ueifs_X
+        self.ueifs_Z = ueifs_Z
 
         ddof = 1 if n > 1 else 0
         results = {
@@ -1592,6 +1708,14 @@ class FlowExplainer(Explainer):
         ueifs_cpi_X = ueifs_cpi @ H_sq.T
         ueifs_scpi_X = ueifs_scpi @ H_sq.T
         
+        # Store per-sample UEIFs for group_importance()
+        if self.method == "scpi":
+            self.ueifs_Z = ueifs_scpi
+            self.ueifs_X = ueifs_scpi_X
+        else:
+            self.ueifs_Z = ueifs_cpi
+            self.ueifs_X = ueifs_cpi_X
+        
         # Aggregate statistics
         ddof = 1 if n > 1 else 0
         results = {}
@@ -1662,5 +1786,284 @@ class FlowExplainer(Explainer):
                 "se_X_scpi": se_X_scpi,
             })
         
+        self._cache_results(results, n)
+        return results
+
+
+class Crossfitting(Explainer):
+    """
+    Cross-fitted DFI explainer for valid inference at small sample sizes.
+
+    Wraps any Explainer subclass and performs cross-fitting using a
+    scikit-learn cross-validation splitter.  The disentanglement map is
+    fitted on the training portion of each split and importance is
+    evaluated on the held-out portion.  Final estimates are the
+    ensemble average of cross-fitted predictors.
+
+    Parameters
+    ----------
+    model : callable
+        The model to explain.  Takes (n, d) array, returns (n,) predictions.
+    data : numpy.ndarray
+        Full dataset.  Shape (n, d).
+    explainer_class : type, default=OTExplainer
+        The explainer class to instantiate per split.  Must be a subclass
+        of Explainer (e.g., OTExplainer, EOTExplainer, FlowExplainer).
+    cv : int or sklearn cross-validation splitter, default=5
+        Controls how data is split for cross-fitting:
+        - int: number of folds for ``KFold(shuffle=True)``.
+        - sklearn splitter instance: used directly, e.g. ``KFold``,
+          ``StratifiedKFold``, ``ShuffleSplit``, ``RepeatedKFold``,
+          ``GroupKFold``, etc.
+        Any object implementing ``.split(X, y, groups)`` is accepted.
+    y : array-like of shape (n,), optional
+        Target / response variable.  Required only when using a stratified
+        splitter so that fold assignment preserves class distribution.
+    groups : array-like of shape (n,), optional
+        Group labels for group-aware splitters (``GroupKFold``, etc.).
+    random_state : int or None, default=None
+        Random seed for the default ``KFold`` splitter (when *cv* is int)
+        and passed to child explainers.
+    **kwargs : dict
+        Additional keyword arguments forwarded to each split's explainer
+        constructor (e.g., nsamples, epsilon, sampling_method, num_steps).
+
+    Attributes
+    ----------
+    cv_ : sklearn splitter instance
+        The resolved cross-validation splitter.
+    fold_explainers : list[Explainer]
+        The fitted explainer instances (one per split).
+    fold_indices : list[tuple[numpy.ndarray, numpy.ndarray]]
+        ``(train_idx, test_idx)`` for each split.
+    ueifs_X : numpy.ndarray or None
+        Per-sample X-space UEIFs, shape (n, d), after calling with
+        ``X=None``.
+    ueifs_Z : numpy.ndarray or None
+        Per-sample Z-space UEIFs, shape (n, d), after calling with
+        ``X=None``.
+    """
+
+    def __init__(
+        self,
+        model: Callable[[np.ndarray], np.ndarray],
+        data: np.ndarray,
+        explainer_class: type = OTExplainer,
+        cv: Union[int, Any] = 5,
+        y: Optional[np.ndarray] = None,
+        groups: Optional[np.ndarray] = None,
+        random_state: Optional[int] = None,
+        **kwargs: Any,
+    ):
+        super().__init__(model, data, fit_flow=False, **kwargs)
+        self.explainer_class = explainer_class
+        self.y = np.asarray(y) if y is not None else None
+        self.groups = np.asarray(groups) if groups is not None else None
+        self.random_state = random_state
+        self.cf_kwargs = kwargs
+
+        self.cv_ = self._resolve_cv(cv)
+        self.fold_explainers: list = []
+        self.fold_indices: list = []
+        self.ueifs_X: Optional[np.ndarray] = None
+        self.ueifs_Z: Optional[np.ndarray] = None
+
+    # ------------------------------------------------------------------
+    # CV resolution
+    # ------------------------------------------------------------------
+
+    def _resolve_cv(self, cv: Union[int, Any]) -> Any:
+        """Resolve *cv* parameter to a scikit-learn splitter instance."""
+        if isinstance(cv, int):
+            from sklearn.model_selection import KFold
+            return KFold(n_splits=cv, shuffle=True, random_state=self.random_state)
+        # Accept any object with a .split() method
+        if not hasattr(cv, "split"):
+            raise TypeError(
+                f"cv must be an int or an object with a .split() method, "
+                f"got {type(cv)}"
+            )
+        return cv
+
+    # ------------------------------------------------------------------
+    # Per-sample UEIF extraction (dispatch by explainer type)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_persample_ueifs(
+        explainer: "Explainer",
+        X_test: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Compute per-sample UEIFs in both Z- and X-space for *X_test*
+        using the fitted *explainer*.
+
+        Returns
+        -------
+        ueifs_X : numpy.ndarray, shape (n_test, d)
+        ueifs_Z : numpy.ndarray, shape (n_test, d)
+        """
+        y_pred = explainer.model(X_test)
+
+        if isinstance(explainer, FlowExplainer):
+            Z = explainer._encode_to_Z(X_test)
+            X_hat = explainer._decode_to_X(Z)
+            y_pred = explainer.model(X_hat)
+            ueifs_cpi, ueifs_scpi = explainer._phi_Z(Z, y_pred)
+            H = explainer._compute_jacobian(Z)
+            H_sq = H ** 2
+            if explainer.method == "scpi":
+                ueifs_Z = ueifs_scpi
+            else:
+                ueifs_Z = ueifs_cpi
+            ueifs_X = ueifs_Z @ H_sq.T
+        elif isinstance(explainer, EOTExplainer):
+            Z = explainer.s_fwd * (X_test - explainer.mean) @ explainer.L_inv
+            ueifs_Z = explainer._phi_Z(Z, y_pred)
+            ueifs_X = ueifs_Z @ (explainer.W ** 2).T
+        elif isinstance(explainer, OTExplainer):
+            Z = (X_test - explainer.mean) @ explainer.L_inv
+            ueifs_Z = explainer._phi_Z(Z, y_pred)
+            H = explainer.L ** 2
+            ueifs_X = ueifs_Z @ H.T
+        else:
+            # Fallback: call the explainer and replicate aggregated scores
+            results = explainer(X_test)
+            n = X_test.shape[0]
+            ueifs_X = np.tile(results["phi_X"], (n, 1))
+            ueifs_Z = np.tile(results["phi_Z"], (n, 1))
+
+        return ueifs_X, ueifs_Z
+
+    # ------------------------------------------------------------------
+    # __call__
+    # ------------------------------------------------------------------
+
+    def __call__(
+        self,
+        X: Optional[np.ndarray] = None,
+        **kwargs: Any,
+    ) -> dict:
+        """
+        Compute cross-fitted feature importance.
+
+        If *X* is ``None``, performs full cross-fitting on ``self.data``:
+        each split's test set is the held-out portion of the data.
+
+        If *X* is provided, uses the ensemble of fitted fold explainers
+        to compute importance on *X* and averages the results.
+
+        Parameters
+        ----------
+        X : numpy.ndarray or None
+            If None, cross-fit on ``self.data`` (recommended for valid
+            inference).  If provided, shape (m, d), ensemble-predict on
+            new data.
+
+        Returns
+        -------
+        dict
+            Same format as OTExplainer / FlowExplainer:
+            ``phi_X, std_X, se_X, phi_Z, std_Z, se_Z``.
+        """
+        if X is not None:
+            return self._ensemble_predict(X)
+        return self._crossfit()
+
+    # ------------------------------------------------------------------
+    # Internal: cross-fit on self.data
+    # ------------------------------------------------------------------
+
+    def _crossfit(self) -> dict:
+        n, d = self.data.shape
+        self.fold_explainers = []
+        self.fold_indices = []
+
+        # Collect per-sample UEIFs; support overlapping test sets
+        ueif_counts = np.zeros(n, dtype=int)
+        ueifs_X_accum = np.zeros((n, d))
+        ueifs_Z_accum = np.zeros((n, d))
+
+        for train_idx, test_idx in self.cv_.split(self.data, self.y, self.groups):
+            self.fold_indices.append((train_idx, test_idx))
+
+            fold_exp = self.explainer_class(
+                model=self.model,
+                data=self.data[train_idx],
+                random_state=self.random_state,
+                **self.cf_kwargs,
+            )
+            self.fold_explainers.append(fold_exp)
+
+            X_test = self.data[test_idx]
+            ueifs_X_fold, ueifs_Z_fold = self._get_persample_ueifs(fold_exp, X_test)
+
+            # Accumulate (handles overlapping test sets by averaging later)
+            for local_i, global_i in enumerate(test_idx):
+                ueifs_X_accum[global_i] += ueifs_X_fold[local_i]
+                ueifs_Z_accum[global_i] += ueifs_Z_fold[local_i]
+                ueif_counts[global_i] += 1
+
+        # Average for samples that appeared in multiple test sets
+        seen = ueif_counts > 0
+        ueifs_X_accum[seen] /= ueif_counts[seen, None]
+        ueifs_Z_accum[seen] /= ueif_counts[seen, None]
+
+        # Keep only the samples that were actually evaluated
+        self.ueifs_X = ueifs_X_accum[seen]
+        self.ueifs_Z = ueifs_Z_accum[seen]
+        n_eff = int(seen.sum())
+
+        ddof = 1 if n_eff > 1 else 0
+        results = {
+            "phi_X": self.ueifs_X.mean(axis=0),
+            "std_X": self.ueifs_X.std(axis=0),
+            "se_X": self.ueifs_X.std(axis=0, ddof=ddof) / np.sqrt(n_eff),
+            "phi_Z": self.ueifs_Z.mean(axis=0),
+            "std_Z": self.ueifs_Z.std(axis=0),
+            "se_Z": self.ueifs_Z.std(axis=0, ddof=ddof) / np.sqrt(n_eff),
+        }
+        self._cache_results(results, n_eff)
+        return results
+
+    # ------------------------------------------------------------------
+    # Internal: ensemble prediction on new data
+    # ------------------------------------------------------------------
+
+    def _ensemble_predict(self, X: np.ndarray) -> dict:
+        if not self.fold_explainers:
+            # No fold explainers yet — run cross-fitting first
+            self._crossfit()
+
+        n = X.shape[0]
+        phi_X_list, phi_Z_list = [], []
+        se_X_list, se_Z_list = [], []
+
+        for fold_exp in self.fold_explainers:
+            r = fold_exp(X)
+            phi_X_list.append(r["phi_X"])
+            phi_Z_list.append(r["phi_Z"])
+            se_X_list.append(r["se_X"])
+            se_Z_list.append(r["se_Z"])
+
+        K = len(self.fold_explainers)
+        phi_X = np.mean(phi_X_list, axis=0)
+        phi_Z = np.mean(phi_Z_list, axis=0)
+
+        # Pooled SE: sqrt( mean of se_k^2 ) — accounts for within-fold variance
+        se_X = np.sqrt(np.mean(np.array(se_X_list) ** 2, axis=0))
+        se_Z = np.sqrt(np.mean(np.array(se_Z_list) ** 2, axis=0))
+
+        std_X = se_X * np.sqrt(n)
+        std_Z = se_Z * np.sqrt(n)
+
+        results = {
+            "phi_X": phi_X,
+            "std_X": std_X,
+            "se_X": se_X,
+            "phi_Z": phi_Z,
+            "std_Z": std_Z,
+            "se_Z": se_Z,
+        }
         self._cache_results(results, n)
         return results

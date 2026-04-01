@@ -13,6 +13,7 @@ from fdfi.explainers import (
     OTExplainer,
     EOTExplainer,
     FlowExplainer,
+    Crossfitting,
 )
 
 HAS_TORCH = importlib.util.find_spec("torch") is not None
@@ -703,3 +704,379 @@ class TestFlowVsOTExplainer:
         # Correlation should be positive
         correlation = np.corrcoef(flow_results['phi_X'], ot_results['phi_X'])[0, 1]
         assert correlation > 0, f"Expected positive correlation, got {correlation}"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Crossfitting tests
+# ──────────────────────────────────────────────────────────────────────────
+
+def _simple_model(X):
+    """y = x0 + 2*x1, used across Crossfitting tests."""
+    return X[:, 0] + 2.0 * X[:, 1]
+
+
+class TestCrossfittingInit:
+    """Constructor and CV resolution."""
+
+    def test_init_stores_args(self):
+        data = np.random.randn(60, 4)
+        cf = Crossfitting(_simple_model, data, explainer_class=OTExplainer, cv=3)
+        assert cf.explainer_class is OTExplainer
+        assert cf.fold_explainers == []
+        assert cf.ueifs_X is None
+
+    def test_cv_int_resolves_to_kfold(self):
+        from sklearn.model_selection import KFold
+        data = np.random.randn(50, 3)
+        cf = Crossfitting(_simple_model, data, cv=7, random_state=0)
+        assert isinstance(cf.cv_, KFold)
+        assert cf.cv_.n_splits == 7
+
+    def test_cv_splitter_passthrough(self):
+        from sklearn.model_selection import ShuffleSplit
+        ss = ShuffleSplit(n_splits=3, test_size=0.3, random_state=0)
+        data = np.random.randn(50, 3)
+        cf = Crossfitting(_simple_model, data, cv=ss)
+        assert cf.cv_ is ss
+
+    def test_cv_invalid_type_raises(self):
+        data = np.random.randn(50, 3)
+        with pytest.raises(TypeError):
+            Crossfitting(_simple_model, data, cv=3.14)
+
+
+class TestCrossfittingWithOT:
+    """Cross-fitting with OTExplainer."""
+
+    def test_crossfit_result_keys(self):
+        np.random.seed(0)
+        data = np.random.randn(80, 4)
+        cf = Crossfitting(
+            _simple_model, data,
+            explainer_class=OTExplainer, cv=3, random_state=0,
+            nsamples=10,
+        )
+        results = cf()
+        for key in ("phi_X", "std_X", "se_X", "phi_Z", "std_Z", "se_Z"):
+            assert key in results, f"Missing key {key}"
+            assert results[key].shape == (4,)
+
+    def test_crossfit_fold_count(self):
+        np.random.seed(1)
+        data = np.random.randn(60, 3)
+        cf = Crossfitting(
+            _simple_model, data,
+            explainer_class=OTExplainer, cv=4, nsamples=5,
+            random_state=0,
+        )
+        cf()
+        assert len(cf.fold_explainers) == 4
+        assert len(cf.fold_indices) == 4
+
+    def test_no_train_test_overlap(self):
+        np.random.seed(2)
+        data = np.random.randn(50, 3)
+        cf = Crossfitting(
+            _simple_model, data,
+            explainer_class=OTExplainer, cv=5, nsamples=5,
+            random_state=0,
+        )
+        cf()
+        for train_idx, test_idx in cf.fold_indices:
+            overlap = np.intersect1d(train_idx, test_idx)
+            assert len(overlap) == 0
+
+    def test_conf_int_works(self):
+        np.random.seed(3)
+        data = np.random.randn(80, 4)
+        cf = Crossfitting(
+            _simple_model, data,
+            explainer_class=OTExplainer, cv=3, nsamples=10,
+            random_state=0,
+        )
+        cf()
+        ci = cf.conf_int(alpha=0.05)
+        assert "ci_lower" in ci
+        assert "ci_upper" in ci
+        assert ci["ci_lower"].shape == (4,)
+
+    def test_summary_runs(self):
+        np.random.seed(4)
+        data = np.random.randn(80, 4)
+        cf = Crossfitting(
+            _simple_model, data,
+            explainer_class=OTExplainer, cv=3, nsamples=10,
+            random_state=0,
+        )
+        cf()
+        output = cf.summary(print_output=False)
+        assert "Feature Importance" in output
+
+    def test_ensemble_predict_new_data(self):
+        np.random.seed(5)
+        data = np.random.randn(80, 4)
+        X_new = np.random.randn(20, 4)
+        cf = Crossfitting(
+            _simple_model, data,
+            explainer_class=OTExplainer, cv=3, nsamples=10,
+            random_state=0,
+        )
+        cf()  # fit folds
+        results = cf(X_new)
+        assert results["phi_X"].shape == (4,)
+
+
+class TestCrossfittingWithEOT:
+    """Cross-fitting with EOTExplainer."""
+
+    def test_eot_crossfit(self):
+        np.random.seed(10)
+        data = np.random.randn(80, 4)
+        cf = Crossfitting(
+            _simple_model, data,
+            explainer_class=EOTExplainer, cv=3, nsamples=10,
+            random_state=0,
+        )
+        results = cf()
+        assert results["phi_X"].shape == (4,)
+        assert np.all(np.isfinite(results["phi_X"]))
+
+
+@pytest.mark.skipif(not HAS_TORCH, reason="torch not installed")
+class TestCrossfittingWithFlow:
+    """Cross-fitting with FlowExplainer."""
+
+    def test_flow_crossfit(self):
+        np.random.seed(20)
+        data = np.random.randn(80, 4)
+        cf = Crossfitting(
+            _simple_model, data,
+            explainer_class=FlowExplainer, cv=2,
+            nsamples=5, num_steps=100, random_state=0,
+        )
+        results = cf()
+        assert results["phi_X"].shape == (4,)
+
+
+class TestCrossfittingSplitters:
+    """Different sklearn splitter strategies."""
+
+    def test_stratified_kfold(self):
+        from sklearn.model_selection import StratifiedKFold
+        np.random.seed(30)
+        data = np.random.randn(80, 4)
+        y = np.array([0, 1] * 40)
+        cf = Crossfitting(
+            _simple_model, data,
+            explainer_class=OTExplainer,
+            cv=StratifiedKFold(n_splits=4, shuffle=True, random_state=0),
+            y=y, nsamples=5, random_state=0,
+        )
+        results = cf()
+        assert results["phi_X"].shape == (4,)
+
+    def test_shuffle_split(self):
+        from sklearn.model_selection import ShuffleSplit
+        np.random.seed(31)
+        data = np.random.randn(80, 4)
+        cf = Crossfitting(
+            _simple_model, data,
+            explainer_class=OTExplainer,
+            cv=ShuffleSplit(n_splits=4, test_size=0.25, random_state=0),
+            nsamples=5, random_state=0,
+        )
+        results = cf()
+        assert results["phi_X"].shape == (4,)
+
+    def test_repeated_kfold(self):
+        from sklearn.model_selection import RepeatedKFold
+        np.random.seed(32)
+        data = np.random.randn(60, 3)
+        cf = Crossfitting(
+            _simple_model, data,
+            explainer_class=OTExplainer,
+            cv=RepeatedKFold(n_splits=3, n_repeats=2, random_state=0),
+            nsamples=5, random_state=0,
+        )
+        results = cf()
+        assert results["phi_X"].shape == (3,)
+        # All 60 samples should have been evaluated
+        assert cf.ueifs_X.shape[0] == 60
+
+    def test_group_kfold(self):
+        from sklearn.model_selection import GroupKFold
+        np.random.seed(33)
+        data = np.random.randn(60, 3)
+        groups = np.repeat(np.arange(6), 10)  # 6 groups of 10
+        cf = Crossfitting(
+            _simple_model, data,
+            explainer_class=OTExplainer,
+            cv=GroupKFold(n_splits=3),
+            groups=groups, nsamples=5, random_state=0,
+        )
+        results = cf()
+        assert results["phi_X"].shape == (3,)
+
+    def test_custom_splitter(self):
+        """Any object with .split() should work."""
+        class TwoFoldSplitter:
+            def split(self, X, y=None, groups=None):
+                n = X.shape[0]
+                mid = n // 2
+                yield np.arange(mid, n), np.arange(mid)
+                yield np.arange(mid), np.arange(mid, n)
+
+            def get_n_splits(self, X=None, y=None, groups=None):
+                return 2
+
+        np.random.seed(34)
+        data = np.random.randn(40, 3)
+        cf = Crossfitting(
+            _simple_model, data,
+            explainer_class=OTExplainer,
+            cv=TwoFoldSplitter(), nsamples=5, random_state=0,
+        )
+        results = cf()
+        assert len(cf.fold_explainers) == 2
+        assert results["phi_X"].shape == (3,)
+
+
+# ── Group importance tests ────────────────────────────────────────────
+
+
+def _make_ot_explainer_with_results(seed=42):
+    """Create an OTExplainer and run it so ueifs are populated."""
+    rng = np.random.default_rng(seed)
+    data = rng.standard_normal((80, 5))
+    X = rng.standard_normal((60, 5))
+    explainer = OTExplainer(_simple_model, data, nsamples=5, random_state=0)
+    explainer(X)
+    return explainer
+
+
+class TestGroupImportanceInput:
+    """Test _normalize_groups and input validation."""
+
+    def test_dict_input(self):
+        explainer = _make_ot_explainer_with_results()
+        groups = {"ab": [0, 1], "cde": [2, 3, 4]}
+        res = explainer.group_importance(groups)
+        assert set(res.keys()) == {"groups", "importance", "se", "zscore", "pvalue"}
+        assert len(res["groups"]) == 2
+        assert res["importance"].shape == (2,)
+
+    def test_array_input(self):
+        explainer = _make_ot_explainer_with_results()
+        labels = np.array(["A", "A", "B", "B", "B"])
+        res = explainer.group_importance(labels)
+        assert len(res["groups"]) == 2
+        assert set(res["groups"]) == {"A", "B"}
+
+    def test_dataframe_input(self):
+        import pandas as pd
+        explainer = _make_ot_explainer_with_results()
+        df = pd.DataFrame(
+            {"g1": [1, 1, 0, 0, 0], "g2": [0, 0, 1, 1, 1]},
+        )
+        res = explainer.group_importance(df)
+        assert len(res["groups"]) == 2
+
+    def test_overlapping_groups(self):
+        import pandas as pd
+        explainer = _make_ot_explainer_with_results()
+        df = pd.DataFrame(
+            {"g1": [1, 1, 0, 0, 0], "g2": [0, 1, 1, 0, 0]},  # feature 1 in both
+        )
+        res = explainer.group_importance(df)
+        assert len(res["groups"]) == 2
+        assert np.all(np.isfinite(res["importance"]))
+
+    def test_invalid_input_raises(self):
+        explainer = _make_ot_explainer_with_results()
+        with pytest.raises(TypeError):
+            explainer.group_importance("bad_input")
+
+
+class TestGroupImportanceBehavior:
+    """Test group_importance logic."""
+
+    def test_before_call_raises(self):
+        rng = np.random.default_rng(0)
+        data = rng.standard_normal((50, 4))
+        explainer = OTExplainer(_simple_model, data, nsamples=5, random_state=0)
+        # Haven't called explainer(X) yet
+        with pytest.raises(ValueError, match="Per-sample UEIFs not available"):
+            explainer.group_importance({"all": [0, 1, 2, 3]})
+
+    def test_threshold_null(self):
+        explainer = _make_ot_explainer_with_results()
+        res_thresh = explainer.group_importance(
+            {"all": [0, 1, 2, 3, 4]}, threshold_null=True
+        )
+        res_no = explainer.group_importance(
+            {"all": [0, 1, 2, 3, 4]}, threshold_null=False
+        )
+        # With thresholding, importance >= without (since we zero negatives)
+        assert res_thresh["importance"][0] >= res_no["importance"][0] - 1e-12
+
+    def test_se_adjustment(self):
+        explainer = _make_ot_explainer_with_results()
+        res_adj = explainer.group_importance(
+            {"all": [0, 1, 2, 3, 4]}, se_adjustment=0.1
+        )
+        res_no_adj = explainer.group_importance(
+            {"all": [0, 1, 2, 3, 4]}, se_adjustment=0.0
+        )
+        # With adjustment, SE should be larger
+        assert res_adj["se"][0] >= res_no_adj["se"][0]
+
+    def test_single_feature_group(self):
+        explainer = _make_ot_explainer_with_results()
+        res = explainer.group_importance(
+            {"feat0": [0]}, threshold_null=False, se_adjustment=0.0
+        )
+        # Should match individual feature importance
+        phi_X = explainer.ueifs_X[:, 0].mean()
+        assert np.isclose(res["importance"][0], phi_X, atol=1e-10)
+
+    def test_target_Z(self):
+        explainer = _make_ot_explainer_with_results()
+        res = explainer.group_importance(
+            {"ab": [0, 1]}, target="Z"
+        )
+        assert len(res["groups"]) == 1
+        assert np.all(np.isfinite(res["importance"]))
+
+    def test_pvalues_valid(self):
+        explainer = _make_ot_explainer_with_results()
+        res = explainer.group_importance({"ab": [0, 1], "cde": [2, 3, 4]})
+        assert np.all(res["pvalue"] >= 0)
+        assert np.all(res["pvalue"] <= 1)
+        assert np.all(np.isfinite(res["zscore"]))
+
+
+class TestGroupImportanceExplainers:
+    """Test group_importance across different explainer classes."""
+
+    def test_eot_explainer(self):
+        rng = np.random.default_rng(10)
+        data = rng.standard_normal((80, 5))
+        X = rng.standard_normal((60, 5))
+        explainer = EOTExplainer(_simple_model, data, nsamples=5, random_state=0)
+        explainer(X)
+        res = explainer.group_importance({"ab": [0, 1], "cde": [2, 3, 4]})
+        assert res["importance"].shape == (2,)
+        assert np.all(np.isfinite(res["importance"]))
+
+    def test_crossfitting(self):
+        rng = np.random.default_rng(20)
+        data = rng.standard_normal((80, 5))
+        cf = Crossfitting(
+            _simple_model, data,
+            explainer_class=OTExplainer,
+            cv=3, nsamples=5, random_state=0,
+        )
+        cf()
+        res = cf.group_importance({"ab": [0, 1], "cde": [2, 3, 4]})
+        assert res["importance"].shape == (2,)
+        assert np.all(np.isfinite(res["importance"]))

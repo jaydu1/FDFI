@@ -23,6 +23,9 @@ Quick Decision Guide
    * - Complex multimodal data
      - ``FlowExplainer``
      - Learns data distribution via normalizing flow
+   * - Small sample / valid inference
+     - ``Crossfitting``
+     - Wraps any explainer with K-fold cross-fitting
    * - Mixed data types
      - ``EOTExplainer`` with Gower
      - Use ``cost_metric="gower"``
@@ -267,6 +270,56 @@ KernelExplainer
    from fdfi.explainers import KernelExplainer
 
    explainer = KernelExplainer(model.predict, data=X_background)
+
+Crossfitting (Cross-Fitted Inference)
+-------------------------------------
+
+**Best for:** Small-to-moderate sample sizes where valid confidence intervals
+are critical
+
+**Pros:**
+
+- Eliminates overfitting bias in the disentanglement map
+- Yields valid standard errors and CIs even at small *n*
+- Works with any explainer class (``OTExplainer``, ``EOTExplainer``,
+  ``FlowExplainer``)
+- Supports any scikit-learn cross-validation splitter (``KFold``,
+  ``StratifiedKFold``, ``ShuffleSplit``, ``RepeatedKFold``, ``GroupKFold``,
+  etc.)
+
+**Cons:**
+
+- K× slower than a single explainer (fits one per fold)
+- For ``FlowExplainer`` folds, this means K separate flow trainings
+
+**Key options:**
+
+.. code-block:: python
+
+   from fdfi.explainers import Crossfitting, OTExplainer
+   from sklearn.model_selection import RepeatedKFold
+
+   # Default: 5-fold KFold
+   cf = Crossfitting(
+       model.predict,
+       data=X_background,
+       explainer_class=OTExplainer,
+       cv=5,
+       nsamples=50,
+       random_state=42,
+   )
+   results = cf()          # cross-fit on X_background
+   ci = cf.conf_int(alpha=0.05)
+   cf.summary()
+
+   # RepeatedKFold for lower-variance estimates
+   cf = Crossfitting(
+       model.predict, X_background,
+       explainer_class=OTExplainer,
+       cv=RepeatedKFold(n_splits=5, n_repeats=3, random_state=0),
+       nsamples=50,
+   )
+   results = cf()
 
 Hyperparameter Guidelines
 -------------------------

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.0.4] - 2026-04-01
+### Added
+- **Group importance**: new `group_importance()` method on the base `Explainer` class for computing group-level feature importance with uncertainty. Aggregates per-sample UEIFs within user-defined feature groups and returns importance, standard errors, z-scores, and p-values.
+  - Accepts groups as a `dict` of index lists, a 1-D label array, or a binary `pandas.DataFrame` indicator matrix (features may belong to multiple groups).
+  - Optional null-feature thresholding zeros out per-feature UEIFs with negative mean before aggregation.
+  - Finite-sample SE correction (`se_adjustment` parameter) for conservative inference.
+- Per-sample UEIFs (`ueifs_X`, `ueifs_Z`) are now stored as instance attributes after calling `OTExplainer`, `EOTExplainer`, and `FlowExplainer`, enabling downstream group aggregation.
+- **Crossfitting**: new cross-fitted DFI explainer for valid inference at small sample sizes. Wraps any explainer class (`OTExplainer`, `EOTExplainer`, `FlowExplainer`) and performs K-fold cross-fitting so that the disentanglement map is never evaluated on its own training data.
+- Flexible `cv` parameter accepts an `int` (shorthand for `KFold`) or any scikit-learn splitter instance (`StratifiedKFold`, `ShuffleSplit`, `RepeatedKFold`, `GroupKFold`, custom, etc.).
+- Optional `y` and `groups` parameters for stratified and group-aware splitters.
+- Overlapping test set handling: splitters like `ShuffleSplit` and `RepeatedKFold` that assign samples to multiple test sets are handled by per-sample UEIF averaging.
+- Ensemble prediction on new data: `cf(X_new)` averages importance from all fold explainers.
+- `Crossfitting` inherits `conf_int()` and `summary()` from the base `Explainer` class.
+- `Crossfitting` exported from `fdfi` top-level package.
+- 17 new tests covering init, OT/EOT/Flow cross-fitting, all splitter types, conf_int, summary, and ensemble prediction.
+
 ## [0.0.3] - 2026-03-19
 ### Changed
 - **EOTExplainer rewritten**: semicontinuous forward map with analytical scaling $c_\varepsilon = \sqrt{1+\varepsilon}/(1+\varepsilon/2)$ and population backward attribution $W = L \cdot M_w$.

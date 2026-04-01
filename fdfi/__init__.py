@@ -48,7 +48,9 @@ __author__ = "FDFI Team"
 # Import main explainer classes when they are implemented
 # from .explainers import Explainer, TreeExplainer, LinearExplainer, KernelExplainer
 # from .plots import summary_plot, waterfall_plot, force_plot, dependence_plot
+from .explainers import Crossfitting
 
 __all__ = [
     "__version__",
+    "Crossfitting",
 ]
