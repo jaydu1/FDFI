@@ -45,10 +45,21 @@ def _resolve_version() -> str:
 __version__ = _resolve_version()
 __author__ = "FDFI Team"
 
-# Import main explainer classes when they are implemented
-# from .explainers import Explainer, TreeExplainer, LinearExplainer, KernelExplainer
-# from .plots import summary_plot, waterfall_plot, force_plot, dependence_plot
+# Import main explainer and utility modules
+from . import explainers
+from . import plots
+from . import utils
+from . import models
+
+# Import key classes for convenience
+from .explainers import FlowExplainer
 
 __all__ = [
     "__version__",
+    "__author__",
+    "explainers",
+    "plots",
+    "utils",
+    "models",
+    "FlowExplainer",
 ]
