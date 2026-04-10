@@ -53,6 +53,7 @@ from . import models
 
 # Import key classes for convenience
 from .explainers import FlowExplainer
+from .explainers import Crossfitting
 
 __all__ = [
     "__version__",
@@ -62,4 +63,5 @@ __all__ = [
     "utils",
     "models",
     "FlowExplainer",
+    "Crossfitting",
 ]

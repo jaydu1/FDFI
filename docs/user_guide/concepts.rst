@@ -168,6 +168,34 @@ A key advantage of DFI is **built-in uncertainty quantification**. The
 This enables **statistical feature selection**: identify features that are 
 significantly different from zero or a practical threshold.
 
+Group-Level Importance
+----------------------
+
+In many applications features naturally belong to **groups** (e.g., genomic
+regions, sensor categories, feature families).  The ``group_importance()``
+method aggregates per-sample UEIFs across features within each group and
+reports group-level importance with proper uncertainty.
+
+Given a group :math:`S_g \subseteq \{1, \ldots, d\}`, the group importance is:
+
+.. math::
+
+   \phi_g = \frac{1}{n} \sum_{i=1}^{n} \sum_{j \in S_g} \text{UEIF}_{ij}
+
+The standard error is computed from the per-sample grouped UEIFs
+:math:`u_i = \sum_{j \in S_g} \text{UEIF}_{ij}`:
+
+.. math::
+
+   \text{SE}_g = \frac{\sigma(u)}{\sqrt{n}} + \frac{c}{\sqrt{n}\; z_{1-\alpha/2}}
+
+where :math:`c` is a small finite-sample correction constant (default 0.1)
+that prevents anti-conservative z-scores when the raw SE is very small.
+
+An optional **null-thresholding** step zeros out per-feature UEIFs with
+negative mean before aggregation, preventing estimation noise from
+artificially deflating group importance.
+
 Further Reading
 ---------------
 

@@ -77,6 +77,8 @@ class Explainer:
         self._var_floor_mixture = None
         self._margin_mixture = None
         self._var_floor_value = None
+        self.ueifs_X = None
+        self.ueifs_Z = None
         self.verbose = kwargs.get("verbose", False)
         self.diagnostics = None
         self.compute_diagnostics = kwargs.get("compute_diagnostics", True)
@@ -133,6 +135,9 @@ class Explainer:
 
         return np.sqrt(se_raw**2 + floor**2)
 
+    # Minimum number of features for which GMM-based margin is reliable.
+    _MARGIN_GMM_MIN_D = 30
+
     def conf_int(
         self,
         alpha: float = 0.05,
@@ -141,9 +146,10 @@ class Explainer:
         var_floor_method: str = "mixture",
         var_floor_quantile: float = 0.95,
         margin: float = 0.0,
-        margin_method: str = "mixture",
+        margin_method: str = "auto",
         margin_quantile: float = 0.95,
         alternative: str = "two-sided",
+        verbose: bool = False,
     ) -> dict:
         if self._last_results is None:
             raise ValueError("Run the explainer first to compute scores.")
@@ -162,11 +168,10 @@ class Explainer:
             var_floor_quantile=var_floor_quantile,
         )
 
-        if margin_method == "mixture":
-            self._margin_mixture = TwoComponentMixture().fit(phi_hat)
-            margin = max(self._margin_mixture.quantile(margin_quantile, "smaller"), 0)
-        else:
-            self._margin_mixture = None
+        d = len(phi_hat)
+        margin, margin_method_used = self._compute_margin(
+            phi_hat, margin, margin_method, margin_quantile, d, verbose,
+        )
 
         with np.errstate(divide="ignore", invalid="ignore"):
             if alternative == "greater":
@@ -205,12 +210,201 @@ class Explainer:
             "reject_null": reject_null,
             "pvalue": pvalues,
             "margin": margin,
+            "margin_method": margin_method_used,
             "alternative": alternative,
         }
+
+    # ------------------------------------------------------------------
+    # Margin estimation helpers
+    # ------------------------------------------------------------------
+
+    def _compute_margin(
+        self,
+        phi_hat: np.ndarray,
+        margin: float,
+        margin_method: str,
+        margin_quantile: float,
+        d: int,
+        verbose: bool,
+    ) -> tuple:
+        """Return (margin_value, method_used_string)."""
+
+        if margin_method == "fixed":
+            self._margin_mixture = None
+            if verbose:
+                print(f"[margin] method=fixed, margin={margin:.4f}")
+            return margin, "fixed"
+
+        if margin_method == "auto":
+            if d < self._MARGIN_GMM_MIN_D:
+                method = "gap"
+                reason = f"d={d} < {self._MARGIN_GMM_MIN_D}"
+            else:
+                method = "mixture"
+                reason = f"d={d} >= {self._MARGIN_GMM_MIN_D}"
+            if verbose:
+                print(f"[margin] method=auto → {method} ({reason})")
+        else:
+            method = margin_method
+
+        if method == "gap":
+            margin = self._gap_margin(phi_hat, verbose)
+            self._margin_mixture = None
+            return margin, "gap"
+        elif method == "mixture":
+            self._margin_mixture = TwoComponentMixture().fit(phi_hat)
+            margin = max(
+                self._margin_mixture.quantile(margin_quantile, "smaller"), 0
+            )
+            if verbose:
+                print(
+                    f"[margin] mixture: means={self._margin_mixture.means_.round(4)}, "
+                    f"weights={self._margin_mixture.weights_.round(3)}, "
+                    f"margin={margin:.4f}"
+                )
+            return margin, "mixture"
+        else:
+            raise ValueError(
+                f"margin_method must be 'auto', 'mixture', 'gap', or 'fixed', "
+                f"got '{margin_method}'"
+            )
+
+    @staticmethod
+    def _gap_margin(phi_hat: np.ndarray, verbose: bool = False) -> float:
+        """Largest-gap margin: cluster null vs signal by the biggest
+        multiplicative jump (log-scale gap).
+
+        Uses log-transformed phi values so that a jump from 0.03 → 0.57
+        (~19×) dominates over a jump from 3.6 → 6.2 (~1.7×).
+        The margin is set to the value at the top of the lower cluster.
+        """
+        vals = np.sort(phi_hat)
+        if len(vals) < 2:
+            return 0.0
+        # Work in log-space; shift by a small fraction to handle zeros
+        floor = max(vals[vals > 0].min() * 1e-2, 1e-12) if np.any(vals > 0) else 1e-12
+        log_vals = np.log(np.maximum(vals, floor))
+        log_gaps = np.diff(log_vals)
+        k = int(np.argmax(log_gaps))      # index of the lower-side element
+        margin = float(vals[k])           # top of the null cluster
+        if verbose:
+            print(
+                f"[margin] gap: sorted phi range [{vals[0]:.4f}, {vals[-1]:.4f}], "
+                f"largest log-gap between rank {k} ({vals[k]:.4f}) and {k+1} "
+                f"({vals[k+1]:.4f}), ratio={vals[k+1]/(vals[k]+1e-15):.1f}x, "
+                f"margin={margin:.4f}"
+            )
+        return margin
 
     def summary(self, alpha: float = 0.05, print_output: bool = True, **kwargs) -> str:
         results = self.conf_int(alpha=alpha, **kwargs)
         return self._format_summary(results, alpha, print_output)
+
+    # ------------------------------------------------------------------
+    # Group importance
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_groups(groups, d: int) -> dict:
+        """Normalize group input to ``{group_name: ndarray of feature indices}``."""
+        if isinstance(groups, dict):
+            return {k: np.asarray(v, dtype=int) for k, v in groups.items()}
+        if isinstance(groups, np.ndarray) and groups.ndim == 1:
+            unique_labels = np.unique(groups)
+            return {label: np.where(groups == label)[0] for label in unique_labels}
+        # pandas DataFrame (binary indicator matrix, features × groups)
+        if hasattr(groups, "iloc"):
+            return {
+                col: np.where(groups[col].values > 0)[0]
+                for col in groups.columns
+            }
+        raise TypeError(
+            f"groups must be dict, 1D array, or DataFrame, got {type(groups)}"
+        )
+
+    def group_importance(
+        self,
+        groups: Union[dict, np.ndarray, Any],
+        target: str = "X",
+        threshold_null: bool = True,
+        se_adjustment: float = 0.1,
+        alpha: float = 0.05,
+    ) -> dict:
+        """Compute group-level feature importance with uncertainty.
+
+        Parameters
+        ----------
+        groups : dict, numpy.ndarray, or pandas.DataFrame
+            Group assignment for features. Accepts:
+
+            - ``dict``: ``{group_name: [feature_indices]}``
+            - ``numpy.ndarray``: 1-D array of length *d* with group labels.
+            - ``pandas.DataFrame``: binary indicator matrix (features × groups).
+        target : str, default='X'
+            Which space to aggregate: ``'X'`` or ``'Z'``.
+        threshold_null : bool, default=True
+            Zero out per-feature UEIFs with negative mean before summing.
+        se_adjustment : float, default=0.1
+            Finite-sample SE correction constant.  Set to 0.0 to disable.
+        alpha : float, default=0.05
+            Significance level used for the SE correction quantile.
+
+        Returns
+        -------
+        dict
+            ``'groups'``, ``'importance'``, ``'se'``, ``'zscore'``, ``'pvalue'``
+            — each an array of length *G* (number of groups).
+        """
+        if target == "Z":
+            ueifs = self.ueifs_Z
+        else:
+            ueifs = self.ueifs_X
+        if ueifs is None:
+            raise ValueError(
+                "Per-sample UEIFs not available. Run the explainer first, "
+                "e.g., explainer(X)."
+            )
+
+        n = ueifs.shape[0]
+        d = ueifs.shape[1]
+        group_dict = self._normalize_groups(groups, d)
+
+        z_alpha = stats.norm.ppf(1 - alpha / 2)
+        correction = se_adjustment / np.sqrt(n) / z_alpha if se_adjustment > 0 else 0.0
+
+        group_names = []
+        importances = []
+        ses = []
+        zscores = []
+        pvalues = []
+
+        for name, indices in group_dict.items():
+            ueifs_g = ueifs[:, indices].copy()
+            if threshold_null:
+                feature_means = ueifs_g.mean(axis=0)
+                ueifs_g[:, feature_means < 0] = 0
+            grouped = ueifs_g.sum(axis=1)  # (n,)
+
+            fi = grouped.mean()
+            sigma = grouped.std(ddof=1)
+            se = np.maximum(sigma / np.sqrt(n), 1e-12) + correction
+
+            z = fi / se if se > 0 else np.nan
+            p = 1 - stats.norm.cdf(z) if np.isfinite(z) else np.nan
+
+            group_names.append(name)
+            importances.append(fi)
+            ses.append(se)
+            zscores.append(z)
+            pvalues.append(p)
+
+        return {
+            "groups": np.array(group_names),
+            "importance": np.array(importances, dtype=float),
+            "se": np.array(ses, dtype=float),
+            "zscore": np.array(zscores, dtype=float),
+            "pvalue": np.array(pvalues, dtype=float),
+        }
 
     def _format_summary(self, results: dict, alpha: float, print_output: bool = True) -> str:
         lines = []
@@ -221,6 +415,9 @@ class Explainer:
         lines.append(f"Number of features: {len(results['phi_hat'])}")
         lines.append(f"Significance level: {alpha}")
         lines.append(f"Alternative: {results['alternative']}")
+        margin_method_str = results.get("margin_method", "")
+        if margin_method_str:
+            lines.append(f"Margin method: {margin_method_str}")
         if results["margin"] > 0:
             lines.append(f"Practical margin: {results['margin']:.4f}")
         lines.append("-" * 78)
@@ -685,6 +882,10 @@ class OTExplainer(Explainer):
         # Map latent-space UEIFs back to original X-space per-sample
         ueifs_X = ueifs_Z @ H.T
 
+        # Store per-sample UEIFs for group_importance()
+        self.ueifs_X = ueifs_X
+        self.ueifs_Z = ueifs_Z
+
         # Aggregate to get mean importance and uncertainty (std) across samples
         n = ueifs_X.shape[0]
         ddof = 1 if n > 1 else 0
@@ -749,18 +950,55 @@ class OTExplainer(Explainer):
 
 class EOTExplainer(Explainer):
     """
-    Entropic optimal-transport DFI explainer (no cross-fitting).
+    Entropic optimal-transport DFI explainer using semicontinuous transport
+    and population backward attribution.
 
-    Fits an entropic transport on background data, then uses it to
-    resample Z for counterfactual evaluation with the provided model.
-    Supports adaptive epsilon, stochastic transport sampling, and
-    Gaussian/empirical targets.
+    Uses the population EOT coupling between the empirical source and
+    continuous N(0, I) target.  The forward map is analytical:
 
-    Notable options:
-      - auto_epsilon: enable median-distance heuristic
-      - stochastic_transport: sample from k(z|x) instead of barycentric map
-      - target: "gaussian" or "empirical" transport target
-      - decode_method: "auto" (default), "knn", or "linear" latent decoder
+        Z = c_ε · X_whitened,   c_ε = √(1 + ε) / (1 + ε/2)
+
+    Backward attribution uses the best linear projection:
+
+        E[X_whitened | Z] = M_w · Z
+
+    where M_w = E_π[ZZ^T]^{-1} E_π[ZX_w^T] is computed analytically
+    from the semicontinuous coupling moments.  This gives the weight
+    matrix  W = L @ M_w  used for the decomposition:
+
+        φ_X_j = Σ_k W[j,k]² · φ_Z_k
+
+    Feature importance is measured via the uncentered efficient influence
+    function (UEIF):
+
+        UEIF_{i,j} = (Y_i - ŷ_{-j,i})²
+
+    where ŷ_{-j} averages predictions over counterfactual resamples of
+    feature j.
+
+    Parameters
+    ----------
+    model : callable
+        The model to explain.  Takes (n, d) array, returns (n,) predictions.
+    data : numpy.ndarray
+        Background data for whitening and resampling.  Shape (n, d).
+    nsamples : int, default=50
+        Number of Monte Carlo samples per feature for counterfactual
+        resampling.
+    epsilon : float, default=0.1
+        EOT regularization parameter.  Smaller ε → closer to exact OT;
+        larger ε → more Gaussian shrinkage.
+    auto_epsilon : bool, default=False
+        If True, set ε from a median-distance heuristic in whitened space.
+    sampling_method : str, default='resample'
+        How to draw counterfactual Z_j values:
+        - 'resample': sample from the background Z pool
+        - 'permutation': permute within the test set
+        - 'normal': sample from N(0, 1)
+    random_state : int, default=0
+        Random seed for reproducibility.
+    **kwargs : dict
+        Extra arguments forwarded to the base Explainer.
     """
     def __init__(
         self,
@@ -769,24 +1007,7 @@ class EOTExplainer(Explainer):
         nsamples: int = 50,
         epsilon: float = 0.1,
         auto_epsilon: bool = False,
-        target: str = "gaussian",
-        transport_type: str = "entropic",
-        alpha: float = 0.5,
-        n_iter: int = 100,
-        tol: float = 1e-6,
-        cost_metric: str = "sqeuclidean",
-        cost_fn: Optional[Callable[..., np.ndarray]] = None,
-        cost_kwargs: Optional[dict] = None,
-        categorical_threshold: int = 10,
-        feature_types: Optional[np.ndarray] = None,
-        feature_weights: Optional[np.ndarray] = None,
         sampling_method: str = "resample",
-        stochastic_transport: bool = False,
-        n_transport_samples: int = 10,
-        decode_method: str = "auto",
-        decode_n_neighbors: int = 25,
-        decode_weights: Union[str, Callable] = "distance",
-        decode_leave_one_out: bool = True,
         random_state: int = 0,
         **kwargs: Any
     ):
@@ -794,34 +1015,11 @@ class EOTExplainer(Explainer):
         self.nsamples = nsamples
         self.epsilon = epsilon
         self.auto_epsilon = auto_epsilon
-        self.target = target
-        self.transport_type = transport_type
-        self.alpha = alpha
-        self.n_iter = n_iter
-        self.tol = tol
-        self.cost_metric = cost_metric
-        self.cost_fn = cost_fn
-        self.cost_kwargs = cost_kwargs
-        self.categorical_threshold = categorical_threshold
-        self.feature_types = feature_types
-        self.feature_weights = feature_weights
         self.sampling_method = sampling_method
-        self.stochastic_transport = stochastic_transport
-        self.n_transport_samples = n_transport_samples
-        self.decode_method = decode_method
-        self.decode_n_neighbors = decode_n_neighbors
-        self.decode_weights = decode_weights
-        self.decode_leave_one_out = decode_leave_one_out
-        self.decode_method_effective_ = "linear"
         self.random_state = random_state
         self.regularize = kwargs.get("regularize", 1e-6)
-        self.transport_plan_ = None
-        self.Z_target_ = None
-        self.Z_gauss_ = None
-        self._decode_model = None
-        self.X_centered_ = None
-        self.detected_types_ = None
 
+        # ── Gaussian whitening ───────────────────────────────────────────
         self.mean = np.mean(data, axis=0, keepdims=True)
         self.cov = np.cov(data - self.mean, rowvar=False, ddof=0)
         self.cov = (self.cov + self.cov.T) / 2
@@ -833,93 +1031,101 @@ class EOTExplainer(Explainer):
         self.L_inv = eigenvecs @ np.diag(eigenvals**-0.5) @ eigenvecs.T
 
         X_centered = data - self.mean
-        self.X_centered_ = X_centered
-        Z_gauss = X_centered @ self.L_inv
-        self.Z_gauss_ = Z_gauss
+        X_whitened = X_centered @ self.L_inv
+
         if self.auto_epsilon:
             self.epsilon = self._auto_epsilon(X_centered)
-        Z_entropic = self._fit_entropic_Z(X_centered, Z_gauss)
 
-        if self.transport_type == "entropic":
-            self.Z_fit_ = Z_entropic
-        elif self.transport_type == "semiparametric":
-            self.Z_fit_ = (1.0 - self.alpha) * Z_gauss + self.alpha * Z_entropic
+        # ── Semicontinuous population forward map ────────────────────────
+        # Analytical scaling for Gaussian source → N(0,I) target:
+        #   c_ε = √(1 + ε) / (1 + ε/2)
+        # At ε=0 this gives c=1 (identity); as ε→∞ it approaches 0.
+        eps = self.epsilon
+        if eps == 0:
+            self.s_fwd = 1.0
         else:
-            raise ValueError(f"Unknown transport_type: {self.transport_type}")
+            self.s_fwd = np.sqrt(1.0 + eps) / (1.0 + eps / 2.0)
+        self.L_z = self.s_fwd * self.L
 
-        self._build_decoder()
-        self.Z_full = self.Z_fit_
+        # ── Population backward attribution weights ──────────────────────
+        # Under the semicontinuous coupling Z|X ~ N(c_ε·X_w, σ²·I)
+        # where σ² = 1 - c_ε²  (variance complement for unit marginals).
+        # E_π[ZX_w^T] = c_ε · Σ̂_w
+        # E_π[ZZ^T]   = σ² · I + c_ε² · Σ̂_w
+        # M_w = E_π[ZZ^T]^{-1} E_π[ZX_w^T]  (best linear projection)
+        n, d = X_whitened.shape
+        Sigma_hat = (X_whitened.T @ X_whitened) / n
+        c = self.s_fwd
+        sigma_sq = 1.0 - c ** 2
+        Ezz = sigma_sq * np.eye(d) + c ** 2 * Sigma_hat
+        Ezx = c * Sigma_hat
+        M_w = np.linalg.solve(Ezz, Ezx)
+        self.W = self.L @ M_w
+
+        # ── Resampling pool ──────────────────────────────────────────────
+        self.Z_full = self.s_fwd * X_whitened
         self._compute_diagnostics(report_title="EOTExplainer")
 
-    def __call__(self, X: np.ndarray, **kwargs: Any) -> np.ndarray:
+    def __call__(self, X: np.ndarray, **kwargs: Any) -> dict:
         n, d = X.shape
-        Z = (X - self.mean) @ self.L_inv
+        Z = self.s_fwd * (X - self.mean) @ self.L_inv
         y_pred = self.model(X)
 
         ueifs_Z = self._phi_Z(Z, y_pred)
+        ueifs_X = ueifs_Z @ (self.W ** 2).T
 
-        H = self.L ** 2
-        ueifs_X = ueifs_Z @ H.T
+        # Store per-sample UEIFs for group_importance()
+        self.ueifs_X = ueifs_X
+        self.ueifs_Z = ueifs_Z
 
-        n = ueifs_X.shape[0]
         ddof = 1 if n > 1 else 0
-        phi_X = np.mean(ueifs_X, axis=0)
-        std_X = np.std(ueifs_X, axis=0)
-        se_X = np.std(ueifs_X, axis=0, ddof=ddof) / np.sqrt(n)
-
-        phi_Z = np.mean(ueifs_Z, axis=0)
-        std_Z = np.std(ueifs_Z, axis=0)
-        se_Z = np.std(ueifs_Z, axis=0, ddof=ddof) / np.sqrt(n)
-
         results = {
-            "phi_X": phi_X,
-            "std_X": std_X,
-            "se_X": se_X,
-            "phi_Z": phi_Z,
-            "std_Z": std_Z,
-            "se_Z": se_Z,
+            "phi_X": np.mean(ueifs_X, axis=0),
+            "std_X": np.std(ueifs_X, axis=0),
+            "se_X": np.std(ueifs_X, axis=0, ddof=ddof) / np.sqrt(n),
+            "phi_Z": np.mean(ueifs_Z, axis=0),
+            "std_Z": np.std(ueifs_Z, axis=0),
+            "se_Z": np.std(ueifs_Z, axis=0, ddof=ddof) / np.sqrt(n),
         }
         self._cache_results(results, n)
         return results
 
     def _phi_Z(self, Z: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+        """Compute per-sample uncentered UEIF in Z-space via counterfactual resampling.
+
+        For each feature j, replaces Z_j with independent draws and measures
+        the squared prediction shift:
+
+            UEIF_{i,j} = (y_i - ȳ_{-j,i})²
+
+        where ȳ_{-j} is the mean prediction over counterfactual resamples
+        of feature j.
+        """
         n, d = Z.shape
         ueifs_Z = np.zeros((n, d))
+        L_z = self.L_z
 
-        def compute_y_perm(j: int, rng: np.random.Generator, Z_pool: np.ndarray) -> np.ndarray:
+        for j in range(d):
+            rng = np.random.default_rng(self.random_state + j)
             Z_tilde = np.tile(Z[None, :, :], (self.nsamples, 1, 1))
 
             if self.sampling_method == "resample":
-                resample_idx = rng.choice(
-                    Z_pool.shape[0], size=(self.nsamples, n), replace=True
+                idx = rng.choice(
+                    self.Z_full.shape[0], size=(self.nsamples, n), replace=True
                 )
-                Z_tilde[:, :, j] = Z_pool[resample_idx, j]
+                Z_tilde[:, :, j] = self.Z_full[idx, j]
             elif self.sampling_method == "permutation":
-                perm_idx = np.array([rng.permutation(n) for _ in range(self.nsamples)])
-                Z_tilde[:, :, j] = Z[perm_idx, j]
+                perm = np.array([rng.permutation(n) for _ in range(self.nsamples)])
+                Z_tilde[:, :, j] = Z[perm, j]
             elif self.sampling_method == "normal":
                 Z_tilde[:, :, j] = rng.normal(0.0, 1.0, size=(self.nsamples, n))
             else:
                 raise ValueError(f"Unknown sampling_method: {self.sampling_method}")
 
-            Z_tilde_flat = Z_tilde.reshape(-1, d)
-            X_tilde_flat = Z_tilde_flat @ self.L + self.mean
-
-            y_tilde_flat = self.model(X_tilde_flat)
-            return y_tilde_flat.reshape(self.nsamples, n).mean(axis=0)
-
-        for j in range(d):
-            rng = np.random.default_rng(self.random_state + j)
-            if self.sampling_method == "resample" and self.stochastic_transport:
-                all_y_perm = []
-                for _ in range(self.n_transport_samples):
-                    Z_pool = self._sample_transport_pool(rng)
-                    all_y_perm.append(compute_y_perm(j, rng, Z_pool))
-                y_perm = np.mean(all_y_perm, axis=0)
-            else:
-                y_perm = compute_y_perm(j, rng, self.Z_fit_)
-
-            ueifs_Z[:, j] = (y_pred - y_perm) ** 2
+            Z_flat = Z_tilde.reshape(-1, d)
+            X_tilde = Z_flat @ L_z + self.mean
+            y_tilde = self.model(X_tilde).reshape(self.nsamples, n).mean(axis=0)
+            ueifs_Z[:, j] = (y_pred - y_tilde) ** 2
 
         return ueifs_Z
 
@@ -927,9 +1133,8 @@ class EOTExplainer(Explainer):
         """
         Auto-tune epsilon from latent geometry.
 
-        We estimate pairwise distances in Gaussian-whitened latent space and use
-        a conservative shrinkage factor to avoid over-smoothing transport plans
-        on multi-modal data.
+        Estimates pairwise distances in Gaussian-whitened latent space and
+        uses a conservative shrinkage factor to avoid over-smoothing.
         """
         if X_centered.shape[0] < 2:
             return self.epsilon
@@ -948,206 +1153,9 @@ class EOTExplainer(Explainer):
         eps = 0.25 * (median_sq_dist / Z_ref.shape[1])
         return max(eps, 1e-3)
 
-    def _make_target(self, Z_gauss: np.ndarray) -> np.ndarray:
-        rng = np.random.default_rng(self.random_state)
-        n, d = Z_gauss.shape
-        if self.target == "gaussian":
-            return rng.standard_normal((n, d))
-        if self.target == "empirical":
-            perm = rng.permutation(n)
-            return Z_gauss[perm]
-        raise ValueError(f"Unknown target: {self.target}")
-
-    def _fit_entropic_Z(self, X_centered: np.ndarray, Z_gauss: np.ndarray) -> np.ndarray:
-        Z_target = self._make_target(Z_gauss)
-        C = self._compute_cost_matrix(X_centered, Z_target)
-        P = self._sinkhorn(C)
-        self.Z_target_ = Z_target
-        self.transport_plan_ = P
-        return P @ Z_target
-
-    def _compute_cost_matrix(self, X: np.ndarray, Z: np.ndarray) -> np.ndarray:
-        if self.cost_fn is not None:
-            kwargs = self.cost_kwargs or {}
-            return self.cost_fn(X, Z, **kwargs)
-
-        if self.cost_metric in ("auto", "gower"):
-            detected = detect_feature_types(
-                X,
-                categorical_threshold=self.categorical_threshold,
-                feature_types=self.feature_types,
-            )
-            self.detected_types_ = detected
-            types = detected["types"]
-            ranges = detected["ranges"]
-            if self.cost_metric == "auto":
-                if np.all(types == "continuous"):
-                    return cdist(X, Z, metric="sqeuclidean")
-            return gower_cost_matrix(
-                X,
-                Z,
-                feature_types=types,
-                feature_ranges=ranges,
-                feature_weights=self.feature_weights,
-            )
-
-        if self.cost_metric == "sqeuclidean":
-            return cdist(X, Z, metric="sqeuclidean")
-
-        return cdist(X, Z, metric=self.cost_metric)
-
-    def _sample_transport_pool(self, rng: np.random.Generator) -> np.ndarray:
-        if self.transport_plan_ is None or self.Z_target_ is None:
-            return self.Z_fit_
-
-        P = self.transport_plan_
-        n, m = P.shape
-        d = self.Z_target_.shape[1]
-        Z_entropic = np.zeros((n, d))
-
-        for i in range(n):
-            probs = P[i]
-            if probs.sum() <= 0:
-                probs = np.ones(m) / m
-            else:
-                probs = probs / probs.sum()
-            idx = rng.choice(m, p=probs)
-            Z_entropic[i] = self.Z_target_[idx]
-
-        if self.transport_type == "semiparametric" and self.Z_gauss_ is not None:
-            return (1.0 - self.alpha) * self.Z_gauss_ + self.alpha * Z_entropic
-        return Z_entropic
-
-    def _build_decoder(self) -> None:
-        """Build optional nonlinear decoder from latent Z to original X."""
-        if self.decode_method == "linear":
-            self.decode_method_effective_ = "linear"
-            self._decode_model = None
-            return
-        if self.decode_method not in ("knn", "auto"):
-            raise ValueError(
-                "decode_method must be 'auto', 'linear', or 'knn'"
-            )
-        try:
-            from sklearn.neighbors import NearestNeighbors
-        except ImportError as exc:
-            raise ImportError(
-                "decode_method='knn' requires scikit-learn."
-            ) from exc
-
-        n_neighbors = int(max(1, min(self.decode_n_neighbors, self.Z_fit_.shape[0])))
-        self._decode_model = NearestNeighbors(n_neighbors=n_neighbors)
-        self._decode_model.fit(self.Z_fit_)
-
-        if self.decode_method == "knn":
-            self.decode_method_effective_ = "knn"
-            return
-
-        # Auto-select the decoder with lower reconstruction MSE on training pairs.
-        X_linear = self.Z_fit_ @ self.L
-        mse_linear = float(np.mean((self.X_centered_ - X_linear) ** 2))
-        X_knn = self._predict_knn_centered(self.Z_fit_)
-        mse_knn = float(np.mean((self.X_centered_ - X_knn) ** 2))
-
-        if mse_knn < mse_linear:
-            self.decode_method_effective_ = "knn"
-        else:
-            self.decode_method_effective_ = "linear"
-            self._decode_model = None
-
-    def _predict_knn_centered(self, Z_arr: np.ndarray) -> np.ndarray:
-        """Predict centered X from Z via the configured kNN decoder."""
-        if self._decode_model is None:
-            raise RuntimeError("kNN decoder is not initialized.")
-
-        n_train = self.Z_fit_.shape[0]
-        k = int(max(1, min(self.decode_n_neighbors, n_train)))
-        k_query = min(
-            n_train,
-            k + 1 if self.decode_leave_one_out and n_train > 1 else k,
-        )
-        dists, nbr_idx = self._decode_model.kneighbors(
-            Z_arr, n_neighbors=k_query, return_distance=True
-        )
-
-        X_centered_hat = np.zeros((Z_arr.shape[0], self.X_centered_.shape[1]))
-        for i in range(Z_arr.shape[0]):
-            row_idx = nbr_idx[i]
-            row_dist = dists[i]
-
-            if (
-                self.decode_leave_one_out
-                and row_dist.size > 1
-                and row_dist[0] <= 1e-12
-            ):
-                row_idx = row_idx[1:]
-                row_dist = row_dist[1:]
-
-            row_idx = row_idx[:k]
-            row_dist = row_dist[:k]
-            X_neighbors = self.X_centered_[row_idx]
-
-            if callable(self.decode_weights):
-                w = np.asarray(self.decode_weights(row_dist))
-                if w.shape != row_dist.shape:
-                    raise ValueError(
-                        "decode_weights callable must return shape (n_neighbors,)."
-                    )
-                w = np.maximum(w, 0.0)
-                if w.sum() <= 0:
-                    w = np.ones_like(row_dist)
-                w = w / w.sum()
-                X_centered_hat[i] = w @ X_neighbors
-            elif self.decode_weights == "uniform":
-                X_centered_hat[i] = X_neighbors.mean(axis=0)
-            elif self.decode_weights == "distance":
-                w = 1.0 / np.maximum(row_dist, 1e-12)
-                w = w / w.sum()
-                X_centered_hat[i] = w @ X_neighbors
-            else:
-                raise ValueError(
-                    "decode_weights must be 'uniform', 'distance', or a callable."
-                )
-        return X_centered_hat
-
-    def _sinkhorn(self, C: np.ndarray) -> np.ndarray:
-        n, m = C.shape
-        a = np.ones(n) / n
-        b = np.ones(m) / m
-
-        K = np.exp(-C / self.epsilon)
-        K = np.maximum(K, 1e-300)
-
-        u = np.ones(n)
-        v = np.ones(m)
-
-        for _ in range(self.n_iter):
-            u_prev = u.copy()
-            u = a / (K @ v + 1e-300)
-            v = b / (K.T @ u + 1e-300)
-            if np.max(np.abs(u - u_prev)) < self.tol:
-                break
-
-        P = np.diag(u) @ K @ np.diag(v)
-        row_sums = P.sum(axis=1, keepdims=True)
-        return P / np.maximum(row_sums, 1e-300)
-
     def _decode_from_Z(self, Z: np.ndarray) -> np.ndarray:
-        """
-        Decode Z to X.
-
-        - linear: Gaussian reference map X = ZL + mean
-        - knn: local nonlinear inverse map fitted on (Z_fit_, X_centered)
-        """
-        Z_arr = np.asarray(Z)
-        if Z_arr.ndim != 2:
-            raise ValueError("Z must be a 2D array.")
-
-        if self.decode_method_effective_ == "knn" and self._decode_model is not None:
-            X_centered_hat = self._predict_knn_centered(Z_arr)
-        else:
-            X_centered_hat = Z_arr @ self.L
-        return X_centered_hat + self.mean
+        """Decode Z to X using the population coupling: E[X | Z] ≈ Z @ L_z + mean."""
+        return np.asarray(Z) @ self.L_z + self.mean
 
 
 DFIExplainer = OTExplainer
@@ -1700,6 +1708,14 @@ class FlowExplainer(Explainer):
         ueifs_cpi_X = ueifs_cpi @ H_sq.T
         ueifs_scpi_X = ueifs_scpi @ H_sq.T
         
+        # Store per-sample UEIFs for group_importance()
+        if self.method == "scpi":
+            self.ueifs_Z = ueifs_scpi
+            self.ueifs_X = ueifs_scpi_X
+        else:
+            self.ueifs_Z = ueifs_cpi
+            self.ueifs_X = ueifs_cpi_X
+        
         # Aggregate statistics
         ddof = 1 if n > 1 else 0
         results = {}
@@ -1770,5 +1786,284 @@ class FlowExplainer(Explainer):
                 "se_X_scpi": se_X_scpi,
             })
         
+        self._cache_results(results, n)
+        return results
+
+
+class Crossfitting(Explainer):
+    """
+    Cross-fitted DFI explainer for valid inference at small sample sizes.
+
+    Wraps any Explainer subclass and performs cross-fitting using a
+    scikit-learn cross-validation splitter.  The disentanglement map is
+    fitted on the training portion of each split and importance is
+    evaluated on the held-out portion.  Final estimates are the
+    ensemble average of cross-fitted predictors.
+
+    Parameters
+    ----------
+    model : callable
+        The model to explain.  Takes (n, d) array, returns (n,) predictions.
+    data : numpy.ndarray
+        Full dataset.  Shape (n, d).
+    explainer_class : type, default=OTExplainer
+        The explainer class to instantiate per split.  Must be a subclass
+        of Explainer (e.g., OTExplainer, EOTExplainer, FlowExplainer).
+    cv : int or sklearn cross-validation splitter, default=5
+        Controls how data is split for cross-fitting:
+        - int: number of folds for ``KFold(shuffle=True)``.
+        - sklearn splitter instance: used directly, e.g. ``KFold``,
+          ``StratifiedKFold``, ``ShuffleSplit``, ``RepeatedKFold``,
+          ``GroupKFold``, etc.
+        Any object implementing ``.split(X, y, groups)`` is accepted.
+    y : array-like of shape (n,), optional
+        Target / response variable.  Required only when using a stratified
+        splitter so that fold assignment preserves class distribution.
+    groups : array-like of shape (n,), optional
+        Group labels for group-aware splitters (``GroupKFold``, etc.).
+    random_state : int or None, default=None
+        Random seed for the default ``KFold`` splitter (when *cv* is int)
+        and passed to child explainers.
+    **kwargs : dict
+        Additional keyword arguments forwarded to each split's explainer
+        constructor (e.g., nsamples, epsilon, sampling_method, num_steps).
+
+    Attributes
+    ----------
+    cv_ : sklearn splitter instance
+        The resolved cross-validation splitter.
+    fold_explainers : list[Explainer]
+        The fitted explainer instances (one per split).
+    fold_indices : list[tuple[numpy.ndarray, numpy.ndarray]]
+        ``(train_idx, test_idx)`` for each split.
+    ueifs_X : numpy.ndarray or None
+        Per-sample X-space UEIFs, shape (n, d), after calling with
+        ``X=None``.
+    ueifs_Z : numpy.ndarray or None
+        Per-sample Z-space UEIFs, shape (n, d), after calling with
+        ``X=None``.
+    """
+
+    def __init__(
+        self,
+        model: Callable[[np.ndarray], np.ndarray],
+        data: np.ndarray,
+        explainer_class: type = OTExplainer,
+        cv: Union[int, Any] = 5,
+        y: Optional[np.ndarray] = None,
+        groups: Optional[np.ndarray] = None,
+        random_state: Optional[int] = None,
+        **kwargs: Any,
+    ):
+        super().__init__(model, data, fit_flow=False, **kwargs)
+        self.explainer_class = explainer_class
+        self.y = np.asarray(y) if y is not None else None
+        self.groups = np.asarray(groups) if groups is not None else None
+        self.random_state = random_state
+        self.cf_kwargs = kwargs
+
+        self.cv_ = self._resolve_cv(cv)
+        self.fold_explainers: list = []
+        self.fold_indices: list = []
+        self.ueifs_X: Optional[np.ndarray] = None
+        self.ueifs_Z: Optional[np.ndarray] = None
+
+    # ------------------------------------------------------------------
+    # CV resolution
+    # ------------------------------------------------------------------
+
+    def _resolve_cv(self, cv: Union[int, Any]) -> Any:
+        """Resolve *cv* parameter to a scikit-learn splitter instance."""
+        if isinstance(cv, int):
+            from sklearn.model_selection import KFold
+            return KFold(n_splits=cv, shuffle=True, random_state=self.random_state)
+        # Accept any object with a .split() method
+        if not hasattr(cv, "split"):
+            raise TypeError(
+                f"cv must be an int or an object with a .split() method, "
+                f"got {type(cv)}"
+            )
+        return cv
+
+    # ------------------------------------------------------------------
+    # Per-sample UEIF extraction (dispatch by explainer type)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_persample_ueifs(
+        explainer: "Explainer",
+        X_test: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Compute per-sample UEIFs in both Z- and X-space for *X_test*
+        using the fitted *explainer*.
+
+        Returns
+        -------
+        ueifs_X : numpy.ndarray, shape (n_test, d)
+        ueifs_Z : numpy.ndarray, shape (n_test, d)
+        """
+        y_pred = explainer.model(X_test)
+
+        if isinstance(explainer, FlowExplainer):
+            Z = explainer._encode_to_Z(X_test)
+            X_hat = explainer._decode_to_X(Z)
+            y_pred = explainer.model(X_hat)
+            ueifs_cpi, ueifs_scpi = explainer._phi_Z(Z, y_pred)
+            H = explainer._compute_jacobian(Z)
+            H_sq = H ** 2
+            if explainer.method == "scpi":
+                ueifs_Z = ueifs_scpi
+            else:
+                ueifs_Z = ueifs_cpi
+            ueifs_X = ueifs_Z @ H_sq.T
+        elif isinstance(explainer, EOTExplainer):
+            Z = explainer.s_fwd * (X_test - explainer.mean) @ explainer.L_inv
+            ueifs_Z = explainer._phi_Z(Z, y_pred)
+            ueifs_X = ueifs_Z @ (explainer.W ** 2).T
+        elif isinstance(explainer, OTExplainer):
+            Z = (X_test - explainer.mean) @ explainer.L_inv
+            ueifs_Z = explainer._phi_Z(Z, y_pred)
+            H = explainer.L ** 2
+            ueifs_X = ueifs_Z @ H.T
+        else:
+            # Fallback: call the explainer and replicate aggregated scores
+            results = explainer(X_test)
+            n = X_test.shape[0]
+            ueifs_X = np.tile(results["phi_X"], (n, 1))
+            ueifs_Z = np.tile(results["phi_Z"], (n, 1))
+
+        return ueifs_X, ueifs_Z
+
+    # ------------------------------------------------------------------
+    # __call__
+    # ------------------------------------------------------------------
+
+    def __call__(
+        self,
+        X: Optional[np.ndarray] = None,
+        **kwargs: Any,
+    ) -> dict:
+        """
+        Compute cross-fitted feature importance.
+
+        If *X* is ``None``, performs full cross-fitting on ``self.data``:
+        each split's test set is the held-out portion of the data.
+
+        If *X* is provided, uses the ensemble of fitted fold explainers
+        to compute importance on *X* and averages the results.
+
+        Parameters
+        ----------
+        X : numpy.ndarray or None
+            If None, cross-fit on ``self.data`` (recommended for valid
+            inference).  If provided, shape (m, d), ensemble-predict on
+            new data.
+
+        Returns
+        -------
+        dict
+            Same format as OTExplainer / FlowExplainer:
+            ``phi_X, std_X, se_X, phi_Z, std_Z, se_Z``.
+        """
+        if X is not None:
+            return self._ensemble_predict(X)
+        return self._crossfit()
+
+    # ------------------------------------------------------------------
+    # Internal: cross-fit on self.data
+    # ------------------------------------------------------------------
+
+    def _crossfit(self) -> dict:
+        n, d = self.data.shape
+        self.fold_explainers = []
+        self.fold_indices = []
+
+        # Collect per-sample UEIFs; support overlapping test sets
+        ueif_counts = np.zeros(n, dtype=int)
+        ueifs_X_accum = np.zeros((n, d))
+        ueifs_Z_accum = np.zeros((n, d))
+
+        for train_idx, test_idx in self.cv_.split(self.data, self.y, self.groups):
+            self.fold_indices.append((train_idx, test_idx))
+
+            fold_exp = self.explainer_class(
+                model=self.model,
+                data=self.data[train_idx],
+                random_state=self.random_state,
+                **self.cf_kwargs,
+            )
+            self.fold_explainers.append(fold_exp)
+
+            X_test = self.data[test_idx]
+            ueifs_X_fold, ueifs_Z_fold = self._get_persample_ueifs(fold_exp, X_test)
+
+            # Accumulate (handles overlapping test sets by averaging later)
+            for local_i, global_i in enumerate(test_idx):
+                ueifs_X_accum[global_i] += ueifs_X_fold[local_i]
+                ueifs_Z_accum[global_i] += ueifs_Z_fold[local_i]
+                ueif_counts[global_i] += 1
+
+        # Average for samples that appeared in multiple test sets
+        seen = ueif_counts > 0
+        ueifs_X_accum[seen] /= ueif_counts[seen, None]
+        ueifs_Z_accum[seen] /= ueif_counts[seen, None]
+
+        # Keep only the samples that were actually evaluated
+        self.ueifs_X = ueifs_X_accum[seen]
+        self.ueifs_Z = ueifs_Z_accum[seen]
+        n_eff = int(seen.sum())
+
+        ddof = 1 if n_eff > 1 else 0
+        results = {
+            "phi_X": self.ueifs_X.mean(axis=0),
+            "std_X": self.ueifs_X.std(axis=0),
+            "se_X": self.ueifs_X.std(axis=0, ddof=ddof) / np.sqrt(n_eff),
+            "phi_Z": self.ueifs_Z.mean(axis=0),
+            "std_Z": self.ueifs_Z.std(axis=0),
+            "se_Z": self.ueifs_Z.std(axis=0, ddof=ddof) / np.sqrt(n_eff),
+        }
+        self._cache_results(results, n_eff)
+        return results
+
+    # ------------------------------------------------------------------
+    # Internal: ensemble prediction on new data
+    # ------------------------------------------------------------------
+
+    def _ensemble_predict(self, X: np.ndarray) -> dict:
+        if not self.fold_explainers:
+            # No fold explainers yet — run cross-fitting first
+            self._crossfit()
+
+        n = X.shape[0]
+        phi_X_list, phi_Z_list = [], []
+        se_X_list, se_Z_list = [], []
+
+        for fold_exp in self.fold_explainers:
+            r = fold_exp(X)
+            phi_X_list.append(r["phi_X"])
+            phi_Z_list.append(r["phi_Z"])
+            se_X_list.append(r["se_X"])
+            se_Z_list.append(r["se_Z"])
+
+        K = len(self.fold_explainers)
+        phi_X = np.mean(phi_X_list, axis=0)
+        phi_Z = np.mean(phi_Z_list, axis=0)
+
+        # Pooled SE: sqrt( mean of se_k^2 ) — accounts for within-fold variance
+        se_X = np.sqrt(np.mean(np.array(se_X_list) ** 2, axis=0))
+        se_Z = np.sqrt(np.mean(np.array(se_Z_list) ** 2, axis=0))
+
+        std_X = se_X * np.sqrt(n)
+        std_Z = se_Z * np.sqrt(n)
+
+        results = {
+            "phi_X": phi_X,
+            "std_X": std_X,
+            "se_X": se_X,
+            "phi_Z": phi_Z,
+            "std_Z": std_Z,
+            "se_Z": se_Z,
+        }
         self._cache_results(results, n)
         return results

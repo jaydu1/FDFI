@@ -200,3 +200,124 @@ DFIExplainer Alias
 .. data:: fdfi.explainers.DFIExplainer
 
    Alias for :class:`OTExplainer`.
+
+Cross-Fitting (Crossfitting)
+----------------------------
+
+The ``Crossfitting`` class wraps any of the above explainers and performs
+K-fold cross-fitting so that the disentanglement map is never evaluated on
+its own training data.  This yields valid standard errors and confidence
+intervals even when the sample size is small.
+
+.. autoclass:: fdfi.explainers.Crossfitting
+   :members:
+   :special-members: __init__, __call__
+   :show-inheritance:
+
+**Example — cross-fitted OTExplainer (default KFold):**
+
+.. code-block:: python
+
+   from fdfi.explainers import Crossfitting, OTExplainer
+
+   cf = Crossfitting(
+       model.predict,
+       data=X_background,
+       explainer_class=OTExplainer,
+       cv=5,                    # 5-fold KFold (default)
+       nsamples=50,
+       random_state=42,
+   )
+   results = cf()               # cross-fit on X_background
+   ci = cf.conf_int(alpha=0.05)
+   cf.summary()
+
+**Example — using a custom sklearn splitter:**
+
+.. code-block:: python
+
+   from sklearn.model_selection import StratifiedKFold, ShuffleSplit
+   from fdfi.explainers import Crossfitting, EOTExplainer
+
+   # Stratified K-Fold (preserves class balance)
+   cf = Crossfitting(
+       model.predict, X_background,
+       explainer_class=EOTExplainer,
+       cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=0),
+       y=y_train,               # required for stratification
+       nsamples=50,
+   )
+   results = cf()
+
+   # ShuffleSplit (random train/test splits)
+   cf = Crossfitting(
+       model.predict, X_background,
+       explainer_class=OTExplainer,
+       cv=ShuffleSplit(n_splits=10, test_size=0.2, random_state=0),
+   )
+   results = cf()
+
+**Ensemble prediction on new data:**
+
+.. code-block:: python
+
+   # After cross-fitting, predict on unseen data
+   results_new = cf(X_test)     # averages across all fold explainers
+
+Group Importance
+----------------
+
+All explainer classes inherit ``group_importance()`` from the base
+``Explainer``.  After running an explainer (so that per-sample UEIFs are
+available), call it with a group assignment to obtain group-level
+importance, standard errors, z-scores, and p-values.
+
+Groups can be specified as:
+
+- A ``dict`` mapping group names to lists of feature indices.
+- A 1-D ``numpy`` array of group labels (one per feature).
+- A binary ``pandas.DataFrame`` (features × groups) — features may belong
+  to multiple groups.
+
+.. automethod:: fdfi.explainers.Explainer.group_importance
+
+**Example — dict input:**
+
+.. code-block:: python
+
+   from fdfi.explainers import OTExplainer
+
+   explainer = OTExplainer(model.predict, X_background, nsamples=50)
+   explainer(X_test)
+
+   groups = {"signal": [0, 1, 2], "noise": [3, 4, 5, 6, 7, 8, 9]}
+   res = explainer.group_importance(groups)
+
+   for name, imp, se, p in zip(
+       res["groups"], res["importance"], res["se"], res["pvalue"]
+   ):
+       print(f"{name}: importance={imp:.4f}  se={se:.4f}  p={p:.4f}")
+
+**Example — pandas DataFrame (overlapping groups):**
+
+.. code-block:: python
+
+   import pandas as pd
+
+   # Features can belong to multiple groups
+   df_groups = pd.DataFrame({
+       "group_A": [1, 1, 0, 0, 0],
+       "group_B": [0, 1, 1, 0, 0],   # feature 1 in both A and B
+       "group_C": [0, 0, 0, 1, 1],
+   })
+   res = explainer.group_importance(df_groups)
+
+**Example — with Crossfitting:**
+
+.. code-block:: python
+
+   from fdfi.explainers import Crossfitting, OTExplainer
+
+   cf = Crossfitting(model.predict, X_background, cv=5, nsamples=50)
+   cf()  # cross-fit first
+   res = cf.group_importance({"signal": [0, 1, 2], "noise": [3, 4]})
