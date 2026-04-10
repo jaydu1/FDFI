@@ -404,9 +404,10 @@ def cv_scatter(phi_X, se_X, feature_names, y_cutoff=3.0, group_colors=None,
     
     This function diagnoses the reliability and statistical stability of FDFI attributions
     by scattering the Coefficient of Variation (CV = se_X / (phi_X + epsilon)) against the importance
-    scores (phi_X). Features with CV > y_cutoff are excluded from the plot and reported
-    separately, as they represent statistically unreliable attributions (high noise
-    relative to signal).
+    scores (phi_X). Features with CV > y_cutoff are *not dropped*: they are still shown
+    on the plot by visually capping their CV values near the top border, and are also
+    reported separately as statistically unreliable attributions (high noise relative
+    to signal).
     
     This plot operationalizes the principle of statistical transparency: it exposes
     which attributions are well-determined and which are poorly estimated, guiding
@@ -424,8 +425,8 @@ def cv_scatter(phi_X, se_X, feature_names, y_cutoff=3.0, group_colors=None,
         Human-readable feature names. Length must match phi_X.shape[0].
     y_cutoff : float, default 3.0
         Coefficient of Variation threshold for visual clarity.
-        Features with CV > y_cutoff are excluded from the scatter plot but
-        reported in console output.
+        Features with CV > y_cutoff are visually capped at the top of the plot
+        (hollow downward triangles) and reported in console output.
         
         Recommended range: 2.0–5.0.
         - y_cutoff=2.0: stringent; excludes features where SE > 0.5 * phi.
@@ -463,7 +464,7 @@ def cv_scatter(phi_X, se_X, feature_names, y_cutoff=3.0, group_colors=None,
         DataFrame of plotted (included) features with columns
         ['feature', 'phi', 'se', 'cv']. Sorted by 'phi' descending.
     cv_df_outliers : DataFrame
-        DataFrame of excluded (high-CV) features with same columns.
+        DataFrame of high-CV features with same columns.
     
     Notes
     -----
@@ -477,7 +478,7 @@ def cv_scatter(phi_X, se_X, feature_names, y_cutoff=3.0, group_colors=None,
         Interpretation: use these results cautiously or increase `nsamples`.
     
     Region 3 — Noise (CV > y_cutoff):
-        Standard error >> importance score. Excluded from plot.
+        Standard error >> importance score. Shown as capped hollow triangles.
         Interpretation: statistical signal is overwhelmed by noise;
         confidence in ranking is low. Consider increasing `nsamples`.
     
@@ -488,7 +489,8 @@ def cv_scatter(phi_X, se_X, feature_names, y_cutoff=3.0, group_colors=None,
     **Zero Importance Handling:**
     Features with exactly zero importance but non-zero SE will appear with
     high CV due to numerical epsilon added for stability (1e-8). These are
-    correctly reported as unreliable and will be excluded if CV > y_cutoff.
+    correctly reported as unreliable and will be shown as capped outliers if
+    CV > y_cutoff.
     
     **Reducing CV:**
     Increase `nsamples` in `FlowExplainer()`. Doubling nsamples reduces
@@ -542,7 +544,7 @@ def cv_scatter(phi_X, se_X, feature_names, y_cutoff=3.0, group_colors=None,
     epsilon = 1e-8
     cv_df['cv'] = cv_df['se'] / (cv_df['phi'] + epsilon)
     
-    # --- Filter by cutoff ---
+    # --- Partition by cutoff (do not drop outliers from the plot) ---
     cv_df_filtered = cv_df[cv_df['cv'] <= y_cutoff].copy().sort_values('phi', ascending=False)
     cv_df_outliers = cv_df[cv_df['cv'] > y_cutoff].copy().sort_values('phi', ascending=False)
     
@@ -550,30 +552,59 @@ def cv_scatter(phi_X, se_X, feature_names, y_cutoff=3.0, group_colors=None,
     print("\nCoefficient of Variation (CV) Filtering Summary:")
     print(f"  Total features: {len(cv_df)}")
     print(f"  Displayed (CV ≤ {y_cutoff}): {len(cv_df_filtered)}")
-    print(f"  Excluded (CV > {y_cutoff}): {len(cv_df_outliers)}")
+    print(f"  High-CV (CV > {y_cutoff}): {len(cv_df_outliers)}")
     if len(cv_df_outliers) > 0:
         excluded_str = ', '.join(cv_df_outliers['feature'].values)
-        print(f"  Excluded features (high CV — statistically unreliable): {excluded_str}")
+        print(f"  High-CV features (statistically unreliable): {excluded_str}")
     
     # --- Assign colors ---
     if group_colors is None:
-        scatter_colours = ['#4878a8'] * len(cv_df_filtered)
+        scatter_colours_inlier = ['#4878a8'] * len(cv_df_filtered)
+        scatter_colours_outlier = ['#4878a8'] * len(cv_df_outliers)
     else:
-        scatter_colours = [group_colors.get(f, '#888888') for f in cv_df_filtered['feature']]
+        scatter_colours_inlier = [group_colors.get(f, '#888888') for f in cv_df_filtered['feature']]
+        scatter_colours_outlier = [group_colors.get(f, '#888888') for f in cv_df_outliers['feature']]
     
     # --- Plot ---
     fig, ax = plt.subplots(figsize=figsize)
-    
-    ax.scatter(
-        cv_df_filtered['phi'], cv_df_filtered['cv'],
-        c=scatter_colours, s=85, edgecolors='white', linewidths=0.7, zorder=3
-    )
+
+    # Visual cap for outliers (place at the top edge but keep them visible)
+    # Assumption: y-limit top is y_cutoff + 0.5, so default cap is y_cutoff + 0.4.
+    y_top = y_cutoff + 0.5
+    outlier_cap = kwargs.get('outlier_cap', y_cutoff + 0.4)
+    outlier_cap = min(outlier_cap, y_top - 0.05)  # keep inside the frame
+
+    # Inliers: solid circles (original behaviour)
+    if len(cv_df_filtered) > 0:
+        ax.scatter(
+            cv_df_filtered['phi'], cv_df_filtered['cv'],
+            c=scatter_colours_inlier, s=85, marker='o',
+            edgecolors='white', linewidths=0.7, zorder=3
+        )
+
+    # Outliers: hollow downward triangles, capped to top edge
+    if len(cv_df_outliers) > 0:
+        ax.scatter(
+            cv_df_outliers['phi'], np.full(len(cv_df_outliers), outlier_cap),
+            s=100, marker='v',
+            facecolors='none', edgecolors=scatter_colours_outlier,
+            linewidths=1.2, zorder=4
+        )
     
     # --- Annotate points with feature names ---
     for _, row in cv_df_filtered.iterrows():
         ax.annotate(
             row['feature'],
             xy=(row['phi'], row['cv']),
+            xytext=(3, 3),
+            textcoords='offset points',
+            fontsize=tick_fontsize,
+            color='#333333'
+        )
+    for _, row in cv_df_outliers.iterrows():
+        ax.annotate(
+            row['feature'],
+            xy=(row['phi'], outlier_cap),
             xytext=(3, 3),
             textcoords='offset points',
             fontsize=tick_fontsize,
@@ -587,13 +618,25 @@ def cv_scatter(phi_X, se_X, feature_names, y_cutoff=3.0, group_colors=None,
     # --- Axes and labels ---
     ax.set_xlabel(r'Mean $|\phi_X|$ (importance)', fontsize=label_fontsize)
     ax.set_ylabel('Coefficient of Variation (se / phi)', fontsize=label_fontsize)
-    ax.set_ylim(-0.05, y_cutoff + 0.5)
+    ax.set_ylim(-0.05, y_top)
     ax.set_title(
         'Attribution Reliability: Importance vs. Coefficient of Variation\n'
-        f'(Note: Features with CV > {y_cutoff} excluded for visual clarity)',
+        f'(Note: Features with CV > {y_cutoff} are capped at the top edge)',
         fontsize=title_fontsize, pad=12
     )
-    ax.legend(fontsize=9, loc='upper right')
+
+    # Legend: add a proxy artist explaining the capped outliers
+    from matplotlib.lines import Line2D
+    handles, labels = ax.get_legend_handles_labels()
+    handles.append(
+        Line2D(
+            [0], [0],
+            marker='v', linestyle='None',
+            markerfacecolor='none', markeredgecolor='#333333',
+            markersize=8, label=f'CV > {y_cutoff}'
+        )
+    )
+    ax.legend(handles=handles, fontsize=9, loc='upper right')
     ax.grid(linestyle='--', alpha=0.35, zorder=0)
     ax.set_axisbelow(True)
     
