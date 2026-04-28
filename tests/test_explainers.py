@@ -203,6 +203,7 @@ class TestOTExplainer:
             alpha=0.05, target="X", alternative="two-sided", var_floor_c=0.0
         )
         assert np.all(ci["ci_lower"][:10] > 0)
+        assert "score" in ci
 
     def test_diagnostics_populated(self):
         X_train, _ = generate_exp3_data(n=120, seed=11)
@@ -271,6 +272,7 @@ class TestEOTExplainer:
             alpha=0.05, target="X", alternative="two-sided", var_floor_c=0.0
         )
         assert np.all(ci["ci_lower"][:10] > 0)
+        assert "score" in ci
 
     def test_margin_method_auto_uses_gap_for_small_d(self):
         """auto margin should use gap method when d < 30."""
@@ -583,7 +585,7 @@ class TestFlowExplainer:
         # Test conf_int
         ci = explainer.conf_int(alpha=0.05, target='X', alternative='two-sided')
         
-        assert 'phi_hat' in ci
+        assert 'score' in ci
         assert 'se' in ci
         assert 'ci_lower' in ci
         assert 'ci_upper' in ci
@@ -998,7 +1000,7 @@ class TestGroupImportanceInput:
 
 
 class TestGroupImportanceBehavior:
-    """Test group_importance logic."""
+    """Test group_importance logic and conf_int(groups=...)."""
 
     def test_before_call_raises(self):
         rng = np.random.default_rng(0)
@@ -1006,53 +1008,75 @@ class TestGroupImportanceBehavior:
         explainer = OTExplainer(_simple_model, data, nsamples=5, random_state=0)
         # Haven't called explainer(X) yet
         with pytest.raises(ValueError, match="Per-sample UEIFs not available"):
-            explainer.group_importance({"all": [0, 1, 2, 3]})
+            explainer.conf_int(groups={"all": [0, 1, 2, 3]})
+
+    def test_conf_int_groups(self):
+        explainer = _make_ot_explainer_with_results()
+        groups = {"ab": [0, 1], "cde": [2, 3, 4]}
+        res = explainer.conf_int(groups=groups)
+        
+        assert "groups" in res
+        assert len(res["groups"]) == 2
+        assert res["score"].shape == (2,)
+        assert "ci_lower" in res
+        assert "ci_upper" in res
+        assert "pvalue" in res
 
     def test_threshold_null(self):
         explainer = _make_ot_explainer_with_results()
-        res_thresh = explainer.group_importance(
-            {"all": [0, 1, 2, 3, 4]}, threshold_null=True
+        groups = {"all": [0, 1, 2, 3, 4]}
+        res_thresh = explainer.conf_int(
+            groups=groups, threshold_null=True
         )
-        res_no = explainer.group_importance(
-            {"all": [0, 1, 2, 3, 4]}, threshold_null=False
+        res_no = explainer.conf_int(
+            groups=groups, threshold_null=False
         )
         # With thresholding, importance >= without (since we zero negatives)
-        assert res_thresh["importance"][0] >= res_no["importance"][0] - 1e-12
+        assert res_thresh["score"][0] >= res_no["score"][0] - 1e-12
 
     def test_se_adjustment(self):
         explainer = _make_ot_explainer_with_results()
-        res_adj = explainer.group_importance(
-            {"all": [0, 1, 2, 3, 4]}, se_adjustment=0.1
+        groups = {"all": [0, 1, 2, 3, 4]}
+        # Use var_floor_c which maps to the old se_adjustment
+        res_adj = explainer.conf_int(
+            groups=groups, var_floor_c=0.1, var_floor_method="fixed"
         )
-        res_no_adj = explainer.group_importance(
-            {"all": [0, 1, 2, 3, 4]}, se_adjustment=0.0
+        res_no_adj = explainer.conf_int(
+            groups=groups, var_floor_c=0.0, var_floor_method="fixed"
         )
         # With adjustment, SE should be larger
         assert res_adj["se"][0] >= res_no_adj["se"][0]
 
     def test_single_feature_group(self):
         explainer = _make_ot_explainer_with_results()
-        res = explainer.group_importance(
-            {"feat0": [0]}, threshold_null=False, se_adjustment=0.0
+        res = explainer.conf_int(
+            groups={"feat0": [0]}, threshold_null=False, var_floor_c=0.0
         )
         # Should match individual feature importance
         phi_X = explainer.ueifs_X[:, 0].mean()
-        assert np.isclose(res["importance"][0], phi_X, atol=1e-10)
+        assert np.isclose(res["score"][0], phi_X, atol=1e-10)
 
     def test_target_Z(self):
         explainer = _make_ot_explainer_with_results()
-        res = explainer.group_importance(
-            {"ab": [0, 1]}, target="Z"
+        res = explainer.conf_int(
+            groups={"ab": [0, 1]}, target="Z"
         )
         assert len(res["groups"]) == 1
-        assert np.all(np.isfinite(res["importance"]))
+        assert np.all(np.isfinite(res["score"]))
 
     def test_pvalues_valid(self):
         explainer = _make_ot_explainer_with_results()
-        res = explainer.group_importance({"ab": [0, 1], "cde": [2, 3, 4]})
+        res = explainer.conf_int(groups={"ab": [0, 1], "cde": [2, 3, 4]})
         assert np.all(res["pvalue"] >= 0)
         assert np.all(res["pvalue"] <= 1)
-        assert np.all(np.isfinite(res["zscore"]))
+        assert np.all(np.isfinite(res["score"]))
+
+    def test_deprecation_warning(self):
+        explainer = _make_ot_explainer_with_results()
+        with pytest.warns(FutureWarning, match=r"group_importance\(\) is deprecated"):
+            res = explainer.group_importance({"ab": [0, 1]})
+        assert "importance" in res
+
 
 
 class TestGroupImportanceExplainers:

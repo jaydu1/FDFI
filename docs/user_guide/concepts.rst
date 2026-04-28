@@ -162,8 +162,9 @@ A key advantage of DFI is **built-in uncertainty quantification**. The
 
 - Standard errors computed across samples
 - Confidence intervals using normal approximation
-- P-values for testing :math:`H_0: \\phi_j = 0` or :math:`H_0: \\phi_j \\leq \\delta`
+- P-values for testing :math:`H_0: \phi_j = 0` or :math:`H_0: \phi_j \leq \delta`
 - Variance floor methods for stable inference with small effects
+- **Score**: the estimated feature importance (mean UEIF)
 
 This enables **statistical feature selection**: identify features that are 
 significantly different from zero or a practical threshold.
@@ -172,9 +173,9 @@ Group-Level Importance
 ----------------------
 
 In many applications features naturally belong to **groups** (e.g., genomic
-regions, sensor categories, feature families).  The ``group_importance()``
-method aggregates per-sample UEIFs across features within each group and
-reports group-level importance with proper uncertainty.
+regions, sensor categories, feature families).  The ``conf_int()`` method
+supports a ``groups`` argument that aggregates per-sample UEIFs across features
+within each group and reports group-level importance with proper uncertainty.
 
 Given a group :math:`S_g \subseteq \{1, \ldots, d\}`, the group importance is:
 
@@ -192,9 +193,13 @@ The standard error is computed from the per-sample grouped UEIFs
 where :math:`c` is a small finite-sample correction constant (default 0.1)
 that prevents anti-conservative z-scores when the raw SE is very small.
 
-An optional **null-thresholding** step zeros out per-feature UEIFs with
+An optional **null-thresholding** step (``threshold_null=True``) zeros out per-feature UEIFs with
 negative mean before aggregation, preventing estimation noise from
 artificially deflating group importance.
+
+Previously, this was handled by a separate ``group_importance()`` method,
+which is now deprecated in favor of the more flexible ``conf_int(groups=...)``
+API.
 
 Further Reading
 ---------------

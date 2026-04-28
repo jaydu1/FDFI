@@ -142,6 +142,8 @@ class Explainer:
         self,
         alpha: float = 0.05,
         target: str = "X",
+        groups: Optional[Union[dict, np.ndarray, Any]] = None,
+        threshold_null: bool = True,
         var_floor_c: float = 0.1,
         var_floor_method: str = "mixture",
         var_floor_quantile: float = 0.95,
@@ -151,15 +153,92 @@ class Explainer:
         alternative: str = "two-sided",
         verbose: bool = False,
     ) -> dict:
-        if self._last_results is None:
-            raise ValueError("Run the explainer first to compute scores.")
+        """
+        Compute confidence intervals and significance statistics for feature importance.
 
-        if target == "Z":
-            phi_hat = self._last_results["phi_Z"]
-            se_raw = self._last_results["se_Z"]
+        If `groups` is provided, computes importance and uncertainty at the group level.
+
+        Parameters
+        ----------
+        alpha : float, default=0.05
+            Significance level.
+        target : str, default='X'
+            Which space to use: 'X' (original) or 'Z' (latent).
+        groups : dict, numpy.ndarray, or pandas.DataFrame, optional
+            Group assignment for features. Accepts:
+            - ``dict``: ``{group_name: [feature_indices]}``
+            - ``numpy.ndarray``: 1-D array of length *d* with group labels.
+            - ``pandas.DataFrame``: binary indicator matrix (features x groups).
+        threshold_null : bool, default=True
+            Zero out per-feature uncentered UEIFs with negative mean before summing.
+        var_floor_c : float, default=0.1
+            Constant for the variance floor.
+        var_floor_method : str, default='mixture'
+            Method for variance floor calculation ('mixture' or 'fixed').
+        var_floor_quantile : float, default=0.95
+            Quantile for the 'mixture' variance floor method.
+        margin : float, default=0.0
+            Hypothesized margin for null hypothesis.
+        margin_method : str, default='auto'
+            Method to estimate the margin ('auto', 'mixture', 'gap', or 'fixed').
+        margin_quantile : float, default=0.95
+            Quantile for the 'mixture' margin method.
+        alternative : str, default='two-sided'
+            Alternative hypothesis ('two-sided', 'greater', or 'less').
+        verbose : bool, default=False
+            Whether to print debug information.
+
+        Returns
+        -------
+        dict
+            Dictionary containing 'score', 'se', 'ci_lower', 'ci_upper',
+            'reject_null', 'pvalue', 'margin', and 'alternative'.
+            If `groups` is provided, 'groups' (list of names) is also included.
+        """
+        if groups is not None:
+            if target == "Z":
+                ueifs = self.ueifs_Z
+            else:
+                ueifs = self.ueifs_X
+
+            if ueifs is None:
+                raise ValueError(
+                    "Per-sample UEIFs not available. Run the explainer first."
+                )
+
+            n = ueifs.shape[0]
+            d = ueifs.shape[1]
+            group_dict = self._normalize_groups(groups, d)
+
+            group_names = []
+            phi_hat_list = []
+            se_raw_list = []
+
+            for name, indices in group_dict.items():
+                ueifs_g = ueifs[:, indices].copy()
+                if threshold_null:
+                    feature_means = ueifs_g.mean(axis=0)
+                    ueifs_g[:, feature_means < 0] = 0
+                grouped_ueifs = ueifs_g.sum(axis=1)
+
+                phi_hat_list.append(grouped_ueifs.mean())
+                # Standard error of the mean
+                se_raw_list.append(grouped_ueifs.std(ddof=1) / np.sqrt(n))
+                group_names.append(name)
+
+            phi_hat = np.array(phi_hat_list)
+            se_raw = np.array(se_raw_list)
+            self._last_n = n
         else:
-            phi_hat = self._last_results["phi_X"]
-            se_raw = self._last_results["se_X"]
+            if self._last_results is None:
+                raise ValueError("Run the explainer first to compute scores.")
+
+            if target == "Z":
+                phi_hat = self._last_results["phi_Z"]
+                se_raw = self._last_results["se_Z"]
+            else:
+                phi_hat = self._last_results["phi_X"]
+                se_raw = self._last_results["se_X"]
 
         se_adj = self._adjust_se(
             se_raw,
@@ -170,7 +249,12 @@ class Explainer:
 
         d = len(phi_hat)
         margin, margin_method_used = self._compute_margin(
-            phi_hat, margin, margin_method, margin_quantile, d, verbose,
+            phi_hat,
+            margin,
+            margin_method,
+            margin_quantile,
+            d,
+            verbose,
         )
 
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -202,8 +286,8 @@ class Explainer:
 
             pvalues = np.where(np.isfinite(pvalues), pvalues, 1.0)
 
-        return {
-            "phi_hat": phi_hat,
+        out = {
+            "score": phi_hat,
             "se": se_adj,
             "ci_lower": ci_lower,
             "ci_upper": ci_upper,
@@ -213,6 +297,9 @@ class Explainer:
             "margin_method": margin_method_used,
             "alternative": alternative,
         }
+        if groups is not None:
+            out["groups"] = group_names
+        return out
 
     # ------------------------------------------------------------------
     # Margin estimation helpers
@@ -332,6 +419,9 @@ class Explainer:
     ) -> dict:
         """Compute group-level feature importance with uncertainty.
 
+        .. deprecated:: 0.2.0
+            Use :meth:`conf_int` with the ``groups`` argument instead.
+
         Parameters
         ----------
         groups : dict, numpy.ndarray, or pandas.DataFrame
@@ -345,9 +435,9 @@ class Explainer:
         threshold_null : bool, default=True
             Zero out per-feature UEIFs with negative mean before summing.
         se_adjustment : float, default=0.1
-            Finite-sample SE correction constant.  Set to 0.0 to disable.
+            Finite-sample SE correction constant. Set to 0.0 to disable.
         alpha : float, default=0.05
-            Significance level used for the SE correction quantile.
+            Significance level.
 
         Returns
         -------
@@ -355,56 +445,33 @@ class Explainer:
             ``'groups'``, ``'importance'``, ``'se'``, ``'zscore'``, ``'pvalue'``
             — each an array of length *G* (number of groups).
         """
-        if target == "Z":
-            ueifs = self.ueifs_Z
-        else:
-            ueifs = self.ueifs_X
-        if ueifs is None:
-            raise ValueError(
-                "Per-sample UEIFs not available. Run the explainer first, "
-                "e.g., explainer(X)."
-            )
+        import warnings
 
-        n = ueifs.shape[0]
-        d = ueifs.shape[1]
-        group_dict = self._normalize_groups(groups, d)
+        warnings.warn(
+            "group_importance() is deprecated and will be removed in a future version. "
+            "Use conf_int(groups=...) instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
 
-        z_alpha = stats.norm.ppf(1 - alpha / 2)
-        correction = se_adjustment / np.sqrt(n) / z_alpha if se_adjustment > 0 else 0.0
-
-        group_names = []
-        importances = []
-        ses = []
-        zscores = []
-        pvalues = []
-
-        for name, indices in group_dict.items():
-            ueifs_g = ueifs[:, indices].copy()
-            if threshold_null:
-                feature_means = ueifs_g.mean(axis=0)
-                ueifs_g[:, feature_means < 0] = 0
-            grouped = ueifs_g.sum(axis=1)  # (n,)
-
-            fi = grouped.mean()
-            sigma = grouped.std(ddof=1)
-            se = np.maximum(sigma / np.sqrt(n), 1e-12) + correction
-
-            z = fi / se if se > 0 else np.nan
-            p = 1 - stats.norm.cdf(z) if np.isfinite(z) else np.nan
-
-            group_names.append(name)
-            importances.append(fi)
-            ses.append(se)
-            zscores.append(z)
-            pvalues.append(p)
+        # Map group_importance parameters to conf_int parameters
+        results = self.conf_int(
+            alpha=alpha,
+            target=target,
+            groups=groups,
+            threshold_null=threshold_null,
+            var_floor_c=se_adjustment,
+            var_floor_method="fixed",
+        )
 
         return {
-            "groups": np.array(group_names),
-            "importance": np.array(importances, dtype=float),
-            "se": np.array(ses, dtype=float),
-            "zscore": np.array(zscores, dtype=float),
-            "pvalue": np.array(pvalues, dtype=float),
+            "groups": np.array(results["groups"]),
+            "importance": results["score"],
+            "se": results["se"],
+            "zscore": results["score"] / results["se"],
+            "pvalue": results["pvalue"],
         }
+
 
     def _format_summary(self, results: dict, alpha: float, print_output: bool = True) -> str:
         lines = []
@@ -412,7 +479,7 @@ class Explainer:
         lines.append("Feature Importance Results")
         lines.append("=" * 78)
         lines.append(f"Method: {self.__class__.__name__}")
-        lines.append(f"Number of features: {len(results['phi_hat'])}")
+        lines.append(f"Number of units: {len(results['score'])}")
         lines.append(f"Significance level: {alpha}")
         lines.append(f"Alternative: {results['alternative']}")
         margin_method_str = results.get("margin_method", "")
@@ -422,14 +489,16 @@ class Explainer:
             lines.append(f"Practical margin: {results['margin']:.4f}")
         lines.append("-" * 78)
 
+        has_groups = "groups" in results
+        unit_label = "Group" if has_groups else "Feature"
         header = (
-            f"{'Feature':>8} {'Estimate':>10} {'Std Err':>10} "
+            f"{unit_label:>15} {'Estimate':>10} {'Std Err':>10} "
             f"{'CI Lower':>10} {'CI Upper':>10} {'P-value':>10} {'Sig':>5}"
         )
         lines.append(header)
         lines.append("-" * 78)
 
-        for i in range(len(results["phi_hat"])):
+        for i in range(len(results["score"])):
             ci_lower = results["ci_lower"][i]
             ci_upper = results["ci_upper"][i]
             ci_upper_str = (
@@ -444,8 +513,9 @@ class Explainer:
                 if pval < 0.01
                 else ("**" if pval < 0.05 else ("*" if pval < 0.1 else ""))
             )
+            name = str(results["groups"][i]) if has_groups else str(i)
             row = (
-                f"{i:>8} {results['phi_hat'][i]:>10.4f} "
+                f"{name:>15} {results['score'][i]:>10.4f} "
                 f"{results['se'][i]:>10.4f} {ci_lower_str} {ci_upper_str} "
                 f"{pval:>10.4f} {sig:>5}"
             )
@@ -453,7 +523,7 @@ class Explainer:
 
         lines.append("=" * 78)
         n_sig = np.sum(results["reject_null"])
-        lines.append(f"Significant features: {n_sig} / {len(results['phi_hat'])}")
+        lines.append(f"Significant units: {n_sig} / {len(results['score'])}")
         lines.append("---")
         lines.append("Signif. codes:  0 '***' 0.01 '**' 0.05 '*' 0.1 ' ' 1")
         lines.append("=" * 78)
