@@ -20,6 +20,7 @@ FDFI (Flow-Disentangled Feature Importance) is a Python module that provides int
 - 🌊 **Flow-DFI**: FlowExplainer with CPI and SCPI methods for non-Gaussian data
 - 📊 **Rich Visualizations**: Summary, waterfall, force, and dependence plots
 - 🔧 **Easy to Use**: Simple API similar to SHAP
+- 🧪 **Statistical Inference**: Confidence intervals and multiple testing correction (FDR/FWER)
 - 🚀 **Extensible**: Built with modularity in mind for future enhancements
 
 ## Installation
@@ -64,6 +65,10 @@ results = explainer(X_test)
 
 # Confidence intervals (post-hoc)
 ci = explainer.conf_int(alpha=0.05, target="X", alternative="two-sided")
+
+# With multiple testing correction (e.g., FDR control)
+ci_fdr = explainer.conf_int(multitest_method="fdr_bh")
+explainer.summary(multitest_method="fdr_bh")
 ```
 
 ### CI Defaults in v0.0.2

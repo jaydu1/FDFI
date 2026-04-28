@@ -165,9 +165,27 @@ A key advantage of DFI is **built-in uncertainty quantification**. The
 - P-values for testing :math:`H_0: \phi_j = 0` or :math:`H_0: \phi_j \leq \delta`
 - Variance floor methods for stable inference with small effects
 - **Score**: the estimated feature importance (mean UEIF)
+- **Multiple Testing Correction**: control of False Discovery Rate (FDR) or
+  Family-Wise Error Rate (FWER) via ``multitest_method``.
 
 This enables **statistical feature selection**: identify features that are 
 significantly different from zero or a practical threshold.
+
+Multiple Testing Correction
+---------------------------
+
+When testing hundreds of features simultaneously, the probability of obtaining
+false positives (Type I errors) increases. ``conf_int()`` supports multiple
+testing corrections using the ``statsmodels`` library.
+
+By setting ``multitest_method``, you can choose from various correction methods:
+
+- **FWER Control**: ``'bonferroni'``, ``'holm'``, ``'sidak'``, etc.
+- **FDR Control**: ``'fdr_bh'`` (Benjamini-Hochberg), ``'fdr_by'`` (Benjamini-Yekutieli).
+
+When a correction is applied, ``conf_int()`` returns adjusted p-values as
+``pvalue_adj``, and the ``reject_null`` decision is updated to reflect the
+specified ``alpha`` (e.g., FDR < 0.05).
 
 Group-Level Importance
 ----------------------

@@ -144,6 +144,7 @@ class Explainer:
         target: str = "X",
         groups: Optional[Union[dict, np.ndarray, Any]] = None,
         threshold_null: bool = True,
+        multitest_method: Optional[str] = None,
         var_floor_c: float = 0.1,
         var_floor_method: str = "mixture",
         var_floor_quantile: float = 0.95,
@@ -171,6 +172,10 @@ class Explainer:
             - ``pandas.DataFrame``: binary indicator matrix (features x groups).
         threshold_null : bool, default=True
             Zero out per-feature uncentered UEIFs with negative mean before summing.
+        multitest_method : str, optional
+            Multiple testing correction method. Supports methods from 
+            ``statsmodels.stats.multitest.multipletests``, e.g., 'bonferroni', 
+            'holm', 'fdr_bh' (Benjamini-Hochberg), 'fdr_by'.
         var_floor_c : float, default=0.1
             Constant for the variance floor.
         var_floor_method : str, default='mixture'
@@ -194,6 +199,7 @@ class Explainer:
             Dictionary containing 'score', 'se', 'ci_lower', 'ci_upper',
             'reject_null', 'pvalue', 'margin', and 'alternative'.
             If `groups` is provided, 'groups' (list of names) is also included.
+            If `multitest_method` is provided, 'pvalue_adj' is also included.
         """
         if groups is not None:
             if target == "Z":
@@ -297,6 +303,23 @@ class Explainer:
             "margin_method": margin_method_used,
             "alternative": alternative,
         }
+
+        if multitest_method is not None:
+            try:
+                from statsmodels.stats.multitest import multipletests
+            except ImportError as exc:
+                raise ImportError(
+                    "Multiple testing correction requires statsmodels. "
+                    "Install it with `pip install statsmodels`."
+                ) from exc
+
+            reject, pvals_corrected, _, _ = multipletests(
+                pvalues, alpha=alpha, method=multitest_method
+            )
+            out["reject_null"] = reject
+            out["pvalue_adj"] = pvals_corrected
+            out["multitest_method"] = multitest_method
+
         if groups is not None:
             out["groups"] = group_names
         return out
@@ -482,6 +505,11 @@ class Explainer:
         lines.append(f"Number of units: {len(results['score'])}")
         lines.append(f"Significance level: {alpha}")
         lines.append(f"Alternative: {results['alternative']}")
+        
+        multitest_method = results.get("multitest_method")
+        if multitest_method:
+            lines.append(f"Multiple testing: {multitest_method}")
+            
         margin_method_str = results.get("margin_method", "")
         if margin_method_str:
             lines.append(f"Margin method: {margin_method_str}")
@@ -491,13 +519,15 @@ class Explainer:
 
         has_groups = "groups" in results
         unit_label = "Group" if has_groups else "Feature"
+        pval_label = "Adj P-val" if multitest_method else "P-value"
         header = (
             f"{unit_label:>15} {'Estimate':>10} {'Std Err':>10} "
-            f"{'CI Lower':>10} {'CI Upper':>10} {'P-value':>10} {'Sig':>5}"
+            f"{'CI Lower':>10} {'CI Upper':>10} {pval_label:>10} {'Sig':>5}"
         )
         lines.append(header)
         lines.append("-" * 78)
 
+        has_pvalue_adj = "pvalue_adj" in results
         for i in range(len(results["score"])):
             ci_lower = results["ci_lower"][i]
             ci_upper = results["ci_upper"][i]
@@ -507,7 +537,8 @@ class Explainer:
             ci_lower_str = (
                 f"{ci_lower:>10.4f}" if np.isfinite(ci_lower) else f"{'-inf':>10}"
             )
-            pval = results["pvalue"][i]
+            
+            pval = results["pvalue_adj"][i] if has_pvalue_adj else results["pvalue"][i]
             sig = (
                 "***"
                 if pval < 0.01

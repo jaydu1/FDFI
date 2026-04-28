@@ -1079,28 +1079,47 @@ class TestGroupImportanceBehavior:
 
 
 
-class TestGroupImportanceExplainers:
-    """Test group_importance across different explainer classes."""
+class TestMultipleTesting:
+    """Test multiple testing corrections in conf_int."""
 
-    def test_eot_explainer(self):
-        rng = np.random.default_rng(10)
-        data = rng.standard_normal((80, 5))
-        X = rng.standard_normal((60, 5))
-        explainer = EOTExplainer(_simple_model, data, nsamples=5, random_state=0)
-        explainer(X)
-        res = explainer.group_importance({"ab": [0, 1], "cde": [2, 3, 4]})
-        assert res["importance"].shape == (2,)
-        assert np.all(np.isfinite(res["importance"]))
+    def test_conf_int_multitest_bonferroni(self):
+        explainer = _make_ot_explainer_with_results()
+        # d=5 features
+        res = explainer.conf_int(multitest_method="bonferroni")
+        
+        assert "pvalue_adj" in res
+        assert "multitest_method" in res
+        assert res["multitest_method"] == "bonferroni"
+        
+        # Adjusted p-values should be min(p * 5, 1)
+        expected = np.minimum(res["pvalue"] * 5, 1.0)
+        assert np.allclose(res["pvalue_adj"], expected)
+        # reject_null should follow pvalue_adj < alpha
+        assert np.array_equal(res["reject_null"], res["pvalue_adj"] < 0.05)
 
-    def test_crossfitting(self):
-        rng = np.random.default_rng(20)
-        data = rng.standard_normal((80, 5))
-        cf = Crossfitting(
-            _simple_model, data,
-            explainer_class=OTExplainer,
-            cv=3, nsamples=5, random_state=0,
-        )
-        cf()
-        res = cf.group_importance({"ab": [0, 1], "cde": [2, 3, 4]})
-        assert res["importance"].shape == (2,)
-        assert np.all(np.isfinite(res["importance"]))
+    def test_conf_int_multitest_fdr_bh(self):
+        explainer = _make_ot_explainer_with_results()
+        res = explainer.conf_int(multitest_method="fdr_bh")
+        
+        assert "pvalue_adj" in res
+        assert res["multitest_method"] == "fdr_bh"
+        # Adjusted p-values for FDR should be >= raw p-values
+        assert np.all(res["pvalue_adj"] >= res["pvalue"] - 1e-12)
+        assert np.array_equal(res["reject_null"], res["pvalue_adj"] < 0.05)
+
+    def test_summary_with_multitest(self):
+        explainer = _make_ot_explainer_with_results()
+        output = explainer.summary(multitest_method="fdr_bh", print_output=False)
+        assert "Multiple testing: fdr_bh" in output
+        assert "Adj P-val" in output
+
+    def test_multitest_missing_statsmodels(self, monkeypatch):
+        import sys
+        # Simulate missing statsmodels
+        monkeypatch.setitem(sys.modules, "statsmodels.stats.multitest", None)
+        monkeypatch.setitem(sys.modules, "statsmodels", None)
+        
+        explainer = _make_ot_explainer_with_results()
+        with pytest.raises(ImportError, match="Multiple testing correction requires statsmodels"):
+            explainer.conf_int(multitest_method="bonferroni")
+

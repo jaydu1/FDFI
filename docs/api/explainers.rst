@@ -72,6 +72,11 @@ point for most use cases.
    print("Feature importance (X-space):", results["phi_X"])
    print("Standard errors:", results["se_X"])
 
+   # Compute confidence intervals with FDR control (Benjamini-Hochberg)
+   ci = explainer.conf_int(multitest_method='fdr_bh', alpha=0.05)
+   print("Significant features after FDR control:", np.where(ci["reject_null"])[0])
+   print("Adjusted p-values:", ci["pvalue_adj"])
+
 Entropic Optimal Transport (EOTExplainer)
 -----------------------------------------
 
