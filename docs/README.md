@@ -5,7 +5,7 @@ orphan: true
 # DFI Documentation
 
 This is the documentation source for DFI (Disentangled Feature Importance).
-Current documented release: `0.0.2`.
+Current documented release: `0.0.5`.
 
 For the full documentation, see the main README in the project root or build the docs:
 

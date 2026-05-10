@@ -162,19 +162,38 @@ A key advantage of DFI is **built-in uncertainty quantification**. The
 
 - Standard errors computed across samples
 - Confidence intervals using normal approximation
-- P-values for testing :math:`H_0: \\phi_j = 0` or :math:`H_0: \\phi_j \\leq \\delta`
+- P-values for testing :math:`H_0: \phi_j = 0` or :math:`H_0: \phi_j \leq \delta`
 - Variance floor methods for stable inference with small effects
+- **Score**: the estimated feature importance (mean UEIF)
+- **Multiple Testing Correction**: control of False Discovery Rate (FDR) or
+  Family-Wise Error Rate (FWER) via ``multitest_method``.
 
 This enables **statistical feature selection**: identify features that are 
 significantly different from zero or a practical threshold.
+
+Multiple Testing Correction
+---------------------------
+
+When testing hundreds of features simultaneously, the probability of obtaining
+false positives (Type I errors) increases. ``conf_int()`` supports multiple
+testing corrections using the ``statsmodels`` library.
+
+By setting ``multitest_method``, you can choose from various correction methods:
+
+- **FWER Control**: ``'bonferroni'``, ``'holm'``, ``'sidak'``, etc.
+- **FDR Control**: ``'fdr_bh'`` (Benjamini-Hochberg), ``'fdr_by'`` (Benjamini-Yekutieli).
+
+When a correction is applied, ``conf_int()`` returns adjusted p-values as
+``pvalue_adj``, and the ``reject_null`` decision is updated to reflect the
+specified ``alpha`` (e.g., FDR < 0.05).
 
 Group-Level Importance
 ----------------------
 
 In many applications features naturally belong to **groups** (e.g., genomic
-regions, sensor categories, feature families).  The ``group_importance()``
-method aggregates per-sample UEIFs across features within each group and
-reports group-level importance with proper uncertainty.
+regions, sensor categories, feature families).  The ``conf_int()`` method
+supports a ``groups`` argument that aggregates per-sample UEIFs across features
+within each group and reports group-level importance with proper uncertainty.
 
 Given a group :math:`S_g \subseteq \{1, \ldots, d\}`, the group importance is:
 
@@ -192,9 +211,13 @@ The standard error is computed from the per-sample grouped UEIFs
 where :math:`c` is a small finite-sample correction constant (default 0.1)
 that prevents anti-conservative z-scores when the raw SE is very small.
 
-An optional **null-thresholding** step zeros out per-feature UEIFs with
+An optional **null-thresholding** step (``threshold_null=True``) zeros out per-feature UEIFs with
 negative mean before aggregation, preventing estimation noise from
 artificially deflating group importance.
+
+Previously, this was handled by a separate ``group_importance()`` method,
+which is now deprecated in favor of the more flexible ``conf_int(groups=...)``
+API.
 
 Further Reading
 ---------------

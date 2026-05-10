@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fdfi"
-version = "0.0.4"
+version = "0.0.5"
 description = "Flow-Disentangled Feature Importance"
 readme = "README.md"
 authors = [
@@ -33,6 +33,7 @@ dependencies = [
     "scikit-learn>=1.0.0",
     "matplotlib>=3.5.0",
     "seaborn>=0.12.0",
+    "statsmodels>=0.13.0",
 ]
 
 [project.optional-dependencies]

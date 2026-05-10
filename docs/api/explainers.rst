@@ -72,6 +72,11 @@ point for most use cases.
    print("Feature importance (X-space):", results["phi_X"])
    print("Standard errors:", results["se_X"])
 
+   # Compute confidence intervals with FDR control (Benjamini-Hochberg)
+   ci = explainer.conf_int(multitest_method='fdr_bh', alpha=0.05)
+   print("Significant features after FDR control:", np.where(ci["reject_null"])[0])
+   print("Adjusted p-values:", ci["pvalue_adj"])
+
 Entropic Optimal Transport (EOTExplainer)
 -----------------------------------------
 
@@ -267,10 +272,10 @@ intervals even when the sample size is small.
 Group Importance
 ----------------
 
-All explainer classes inherit ``group_importance()`` from the base
-``Explainer``.  After running an explainer (so that per-sample UEIFs are
-available), call it with a group assignment to obtain group-level
-importance, standard errors, z-scores, and p-values.
+All explainer classes support group-level feature importance via the
+``groups`` argument in ``conf_int()``. After running an explainer (so that
+per-sample UEIFs are available), call ``conf_int(groups=...)`` to obtain
+group-level importance, standard errors, and p-values.
 
 Groups can be specified as:
 
@@ -278,8 +283,6 @@ Groups can be specified as:
 - A 1-D ``numpy`` array of group labels (one per feature).
 - A binary ``pandas.DataFrame`` (features × groups) — features may belong
   to multiple groups.
-
-.. automethod:: fdfi.explainers.Explainer.group_importance
 
 **Example — dict input:**
 
@@ -291,10 +294,10 @@ Groups can be specified as:
    explainer(X_test)
 
    groups = {"signal": [0, 1, 2], "noise": [3, 4, 5, 6, 7, 8, 9]}
-   res = explainer.group_importance(groups)
+   res = explainer.conf_int(groups=groups)
 
    for name, imp, se, p in zip(
-       res["groups"], res["importance"], res["se"], res["pvalue"]
+       res["groups"], res["score"], res["se"], res["pvalue"]
    ):
        print(f"{name}: importance={imp:.4f}  se={se:.4f}  p={p:.4f}")
 
@@ -310,7 +313,7 @@ Groups can be specified as:
        "group_B": [0, 1, 1, 0, 0],   # feature 1 in both A and B
        "group_C": [0, 0, 0, 1, 1],
    })
-   res = explainer.group_importance(df_groups)
+   res = explainer.conf_int(groups=df_groups)
 
 **Example — with Crossfitting:**
 
@@ -320,4 +323,4 @@ Groups can be specified as:
 
    cf = Crossfitting(model.predict, X_background, cv=5, nsamples=50)
    cf()  # cross-fit first
-   res = cf.group_importance({"signal": [0, 1, 2], "noise": [3, 4]})
+   res = cf.conf_int(groups={"signal": [0, 1, 2], "noise": [3, 4]})
