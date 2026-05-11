@@ -98,7 +98,7 @@ def correlation_heatmap(X_background, feature_names, savepath=None, **kwargs):
     Examples
     --------
     >>> import numpy as np
-    >>> from dfi.plots import correlation_heatmap
+    >>> from fdfi.plots import correlation_heatmap
     >>> np.random.seed(42)
     >>> X_background = np.random.randn(100, 5)
     >>> feature_names = ['F1', 'F2', 'F3', 'F4', 'F5']
@@ -285,7 +285,7 @@ def summary_bar(phi_X, se_X, feature_names, group_colors=None, savepath=None, **
     Examples
     --------
     >>> import numpy as np
-    >>> from dfi.plots import summary_bar
+    >>> from fdfi.plots import summary_bar
     >>> np.random.seed(42)
     >>> phi_X = np.array([0.050, 0.025, 0.032, 0.015, 0.008])
     >>> se_X = np.array([0.005, 0.003, 0.004, 0.002, 0.001])
@@ -499,7 +499,7 @@ def cv_scatter(phi_X, se_X, feature_names, y_cutoff=3.0, group_colors=None,
     Examples
     --------
     >>> import numpy as np
-    >>> from dfi.plots import cv_scatter
+    >>> from fdfi.plots import cv_scatter
     >>> np.random.seed(42)
     >>> phi_X = np.array([0.050, 0.025, 0.032, 0.015, 0.008])
     >>> se_X = np.array([0.005, 0.010, 0.080, 0.002, 0.015])

@@ -48,7 +48,7 @@ class Explainer:
     Examples
     --------
     >>> import numpy as np
-    >>> from dfi import Explainer
+    >>> from fdfi.explainers import Explainer
     >>> 
     >>> # Define a simple model
     >>> def model(x):
