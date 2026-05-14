@@ -126,7 +126,7 @@ class FlowMatchingModel:
         v_pred = self.model(xt, t)
         return ((v_pred - v_target) ** 2).mean()
 
-    def fit(self, X=None, num_steps=20000, batch_size=512, lr=5e-4, show_plot=False, verbose=True):
+    def fit(self, X=None, num_steps=20000, batch_size=512, lr=5e-4, show_plot=False, verbose=True, dequantize_noise=0.0):
         """
         Train the flow matching model.
         
@@ -166,6 +166,8 @@ class FlowMatchingModel:
         for step in iterator:
             x0 = self._sample_source(batch_size)
             x1 = self._sample_target(batch_size)
+            if dequantize_noise > 0:
+                x1 = x1 + torch.randn_like(x1) * dequantize_noise
             t = torch.rand(batch_size, 1, device=self.device)
 
             loss = self._loss_fn(x0, x1, t)
@@ -214,13 +216,41 @@ class FlowMatchingModel:
         out = odeint(odefunc, x0, t, rtol=rtol, atol=atol, method=method)
         return out[-1]  
     
-    def Jacobi_Batch(self, x_batch, t_span=(0, 1)):
+    def Jacobi_Batch(self, x_batch, t_span=(0, 1), sub_batch=20):
         """
-        Vectorized Jacobian computation using torch.vmap.
-        Crucial for performance in high-dimensional feature attribution.
+        Per-sample Jacobians dX/dZ for a batch of latent-space points.
+
+        Uses the augmented ODE (Jacobi_N) on each sample, processed in
+        sub-batches to keep peak memory bounded.
+
+        Parameters
+        ----------
+        x_batch : array-like, shape (n, d)
+            Latent-space (Z) starting points.
+        t_span : tuple, default=(0, 1)
+            Integration interval (0,1) decodes Z→X.
+        sub_batch : int, default=20
+            Number of samples to process per sub-batch.
+            Memory: sub_batch × d² × 4 bytes  (≈55 MB at sub_batch=20, d=832).
+
+        Returns
+        -------
+        H_batch : numpy.ndarray, shape (n, d, d)
+            H_batch[i] = dX/dZ at x_batch[i].
         """
+        import torch
         self.model.eval()
-        pass
+        if isinstance(x_batch, torch.Tensor):
+            x_batch = x_batch.detach().cpu().numpy()
+        else:
+            x_batch = np.asarray(x_batch)
+        n = len(x_batch)
+        Hs = []
+        for i in range(0, n, sub_batch):
+            chunk = x_batch[i:i + sub_batch]
+            for j in range(len(chunk)):
+                Hs.append(self.Jacobi_N(chunk[j], t_span))
+        return np.stack(Hs, axis=0)   # (n, d, d)
 
     def Jacobi_N(self, y0, t_span=(0, 1)):
         self.model.eval()

@@ -1487,7 +1487,9 @@ class FlowExplainer(Explainer):
         self.verbose = _verbose
         if _verbose is True or _verbose == 'all' or _verbose == 'final':
             self._log("Training flow model...", level="info")
-        self.flow_model.fit(num_steps=num_steps, verbose=_verbose, **kwargs)
+        _dequantize_noise = kwargs.pop("dequantize_noise", self.kwargs.get("dequantize_noise", 0.0))
+        self.flow_model.fit(num_steps=num_steps, verbose=_verbose,
+                            dequantize_noise=_dequantize_noise, **kwargs)
         
         # Encode background data
         self._encode_background()
@@ -1797,17 +1799,29 @@ class FlowExplainer(Explainer):
         # Compute both CPI and SCPI in Z-space (per-sample UEIFs)
         ueifs_cpi, ueifs_scpi = self._phi_Z(Z, y_pred)
         
-        # Compute Jacobian H = dX/dZ (averaged over samples)
-        H = self._compute_jacobian(Z)
-        
-        # Sensitivity matrix: H_sq[l,k] = H[l,k]^2
-        # Maps Z-space importance to X-space: phi_X[l] = sum_k H[l,k]^2 * phi_Z[k]
-        H_sq = H ** 2
-        
-        # Transform per-sample UEIFs from Z-space to X-space
-        # ueifs_X[i, l] = sum_k H_sq[l, k] * ueifs_Z[i, k]
-        ueifs_cpi_X = ueifs_cpi @ H_sq.T
-        ueifs_scpi_X = ueifs_scpi @ H_sq.T
+        # Transform per-sample UEIFs from Z-space to X-space via Jacobian H = dX/dZ
+        # ueifs_X[i, l] = sum_k H[l,k]^2 * ueifs_Z[i, k]
+        jacobian_mode = self.kwargs.get("jacobian_mode", "average")
+        n_jac = self.kwargs.get("jacobian_n_samples", 100)
+        if jacobian_mode == "per_sample":
+            # Per-sample Jacobians: H_batch[i] = dX/dZ at Z[i]
+            H_batch = self.flow_model.Jacobi_Batch(Z)   # (n, d, d)
+            H_sq_batch = H_batch ** 2
+            ueifs_cpi_X  = np.einsum("ilk,ik->il", H_sq_batch, ueifs_cpi)
+            ueifs_scpi_X = np.einsum("ilk,ik->il", H_sq_batch, ueifs_scpi)
+        elif jacobian_mode == "avg_sq":
+            # Average of squared Jacobians: E[H_i^2] — correct for binary data.
+            # Avoids the cancellation in E[H_i]^2 for sign-flipping features.
+            n_est = min(n, n_jac)
+            H_batch = self.flow_model.Jacobi_Batch(Z[:n_est])  # (n_est, d, d)
+            H_sq_avg = (H_batch ** 2).mean(axis=0)              # (d, d)
+            ueifs_cpi_X  = ueifs_cpi  @ H_sq_avg.T
+            ueifs_scpi_X = ueifs_scpi @ H_sq_avg.T
+        else:  # "average" — existing behaviour, backward-compatible
+            H = self._compute_jacobian(Z)
+            H_sq = H ** 2
+            ueifs_cpi_X  = ueifs_cpi  @ H_sq.T
+            ueifs_scpi_X = ueifs_scpi @ H_sq.T
         
         # Store per-sample UEIFs for group_importance()
         if self.method == "scpi":
@@ -2011,13 +2025,35 @@ class Crossfitting(Explainer):
             X_hat = explainer._decode_to_X(Z)
             y_pred = explainer.model(X_hat)
             ueifs_cpi, ueifs_scpi = explainer._phi_Z(Z, y_pred)
-            H = explainer._compute_jacobian(Z)
-            H_sq = H ** 2
-            if explainer.method == "scpi":
-                ueifs_Z = ueifs_scpi
+            jacobian_mode = explainer.kwargs.get("jacobian_mode", "average")
+            n_jac = explainer.kwargs.get("jacobian_n_samples", 100)
+            n_test = Z.shape[0]
+            if jacobian_mode == "per_sample":
+                H_batch = explainer.flow_model.Jacobi_Batch(Z)   # (n, d, d)
+                H_sq_batch = H_batch ** 2
+                if explainer.method == "scpi":
+                    ueifs_Z = ueifs_scpi
+                    ueifs_X = np.einsum("ilk,ik->il", H_sq_batch, ueifs_scpi)
+                else:
+                    ueifs_Z = ueifs_cpi
+                    ueifs_X = np.einsum("ilk,ik->il", H_sq_batch, ueifs_cpi)
+            elif jacobian_mode == "avg_sq":
+                n_est = min(n_test, n_jac)
+                H_batch = explainer.flow_model.Jacobi_Batch(Z[:n_est])  # (n_est, d, d)
+                H_sq_avg = (H_batch ** 2).mean(axis=0)                   # (d, d)
+                if explainer.method == "scpi":
+                    ueifs_Z = ueifs_scpi
+                else:
+                    ueifs_Z = ueifs_cpi
+                ueifs_X = ueifs_Z @ H_sq_avg.T
             else:
-                ueifs_Z = ueifs_cpi
-            ueifs_X = ueifs_Z @ H_sq.T
+                H = explainer._compute_jacobian(Z)
+                H_sq = H ** 2
+                if explainer.method == "scpi":
+                    ueifs_Z = ueifs_scpi
+                else:
+                    ueifs_Z = ueifs_cpi
+                ueifs_X = ueifs_Z @ H_sq.T
         elif isinstance(explainer, EOTExplainer):
             Z = explainer.s_fwd * (X_test - explainer.mean) @ explainer.L_inv
             ueifs_Z = explainer._phi_Z(Z, y_pred)
