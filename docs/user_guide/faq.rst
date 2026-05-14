@@ -50,7 +50,7 @@ continuous data problems.
 
 .. code-block:: python
 
-   from dfi.explainers import OTExplainer
+   from fdfi.explainers import OTExplainer
    explainer = OTExplainer(model.predict, data=X_train, nsamples=50)
    results = explainer(X_test)
 
@@ -68,7 +68,7 @@ Use EOTExplainer with Gower distance:
 
 .. code-block:: python
 
-   from dfi.explainers import EOTExplainer
+   from fdfi.explainers import EOTExplainer
 
    explainer = EOTExplainer(
        model.predict,
@@ -153,7 +153,7 @@ How can I speed up explanation?
 
    .. code-block:: python
 
-      from dfi.utils import sample_background
+      from fdfi.utils import sample_background
       X_bg = sample_background(X_train, n_samples=100)
       explainer = OTExplainer(model, data=X_bg)
 

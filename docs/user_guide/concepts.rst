@@ -68,6 +68,71 @@ DFI provides two main approaches:
 - Supports mixed data types (continuous + categorical)
 - Better for non-Gaussian or mixed-type data
 
+Flow-Disentangled Feature Importance (Flow-DFI)
+-----------------------------------------------
+
+**FlowExplainer** uses **normalizing flows** to learn a flexible, data-driven
+transformation between the original feature space X and a disentangled latent
+space Z where features are approximately independent.
+
+**CPI (Conditional Permutation Importance)**
+
+Averages predictions first, then computes squared difference:
+
+.. math::
+
+   \phi_{Z,j}^{CPI} = (Y - \mathbb{E}_b[f(\tilde{X}_b^{(j)})])^2
+
+where :math:`\tilde{X}_b^{(j)} = T^{-1}(\tilde{Z}_b^{(j)})` and 
+:math:`\tilde{Z}_b^{(j)}` has the j-th component replaced with sample b.
+
+**SCPI (Sobol-CPI)**
+
+Computes squared differences first for each Monte Carlo sample, then averages:
+
+.. math::
+
+   \phi_{Z,j}^{SCPI} = \mathbb{E}_b[(Y - f(\tilde{X}_b^{(j)}))^2]
+
+This is equivalent to the Sobol sensitivity index formulation. The key 
+difference from CPI is the **order of averaging**.
+
+**Jacobian Transformation to X-space**
+
+Both CPI and SCPI compute importance in the disentangled Z-space. To attribute
+importance to the original features :math:`X_l`, we use the **Jacobian** of the
+decoder transformation :math:`T^{-1}: Z \to X`:
+
+.. math::
+
+   \phi_{X,l} = \sum_{k=1}^{d} H_{lk}^2 \cdot \phi_{Z,k}
+
+where :math:`H = \frac{\partial X}{\partial Z}` is the Jacobian matrix evaluated
+at the data points. This correctly accounts for how changes in each latent 
+dimension Z_k affect each original feature X_l.
+
+For linear transformations (as in OTExplainer), this reduces to :math:`\phi_X = H^T H \phi_Z`
+where :math:`H = L` is the Cholesky factor. For normalizing flows, the Jacobian
+varies with position and is computed via automatic differentiation.
+
+**When to Use FlowExplainer**
+
+- Complex non-linear dependencies between features
+- Non-Gaussian data distributions  
+- When OT assumptions are too restrictive
+- When you have sufficient data (>500 samples) to train the flow
+
+Shared Disentanglement Diagnostics
+----------------------------------
+
+All disentangled explainers (OT, EOT, Flow) report two common diagnostics:
+
+- **Latent independence**: median pairwise distance correlation in latent space.
+- **Distribution fidelity**: MMD between original data and reconstructed data.
+
+Both are "lower is better" metrics and are reported with qualitative labels
+(``GOOD``, ``MODERATE``, ``POOR``) using shared thresholds.
+
 Relationship to Other Methods
 -----------------------------
 
@@ -97,11 +162,62 @@ A key advantage of DFI is **built-in uncertainty quantification**. The
 
 - Standard errors computed across samples
 - Confidence intervals using normal approximation
-- P-values for testing :math:`H_0: \\phi_j = 0` or :math:`H_0: \\phi_j \\leq \\delta`
+- P-values for testing :math:`H_0: \phi_j = 0` or :math:`H_0: \phi_j \leq \delta`
 - Variance floor methods for stable inference with small effects
+- **Score**: the estimated feature importance (mean UEIF)
+- **Multiple Testing Correction**: control of False Discovery Rate (FDR) or
+  Family-Wise Error Rate (FWER) via ``multitest_method``.
 
 This enables **statistical feature selection**: identify features that are 
 significantly different from zero or a practical threshold.
+
+Multiple Testing Correction
+---------------------------
+
+When testing hundreds of features simultaneously, the probability of obtaining
+false positives (Type I errors) increases. ``conf_int()`` supports multiple
+testing corrections using the ``statsmodels`` library.
+
+By setting ``multitest_method``, you can choose from various correction methods:
+
+- **FWER Control**: ``'bonferroni'``, ``'holm'``, ``'sidak'``, etc.
+- **FDR Control**: ``'fdr_bh'`` (Benjamini-Hochberg), ``'fdr_by'`` (Benjamini-Yekutieli).
+
+When a correction is applied, ``conf_int()`` returns adjusted p-values as
+``pvalue_adj``, and the ``reject_null`` decision is updated to reflect the
+specified ``alpha`` (e.g., FDR < 0.05).
+
+Group-Level Importance
+----------------------
+
+In many applications features naturally belong to **groups** (e.g., genomic
+regions, sensor categories, feature families).  The ``conf_int()`` method
+supports a ``groups`` argument that aggregates per-sample UEIFs across features
+within each group and reports group-level importance with proper uncertainty.
+
+Given a group :math:`S_g \subseteq \{1, \ldots, d\}`, the group importance is:
+
+.. math::
+
+   \phi_g = \frac{1}{n} \sum_{i=1}^{n} \sum_{j \in S_g} \text{UEIF}_{ij}
+
+The standard error is computed from the per-sample grouped UEIFs
+:math:`u_i = \sum_{j \in S_g} \text{UEIF}_{ij}`:
+
+.. math::
+
+   \text{SE}_g = \frac{\sigma(u)}{\sqrt{n}} + \frac{c}{\sqrt{n}\; z_{1-\alpha/2}}
+
+where :math:`c` is a small finite-sample correction constant (default 0.1)
+that prevents anti-conservative z-scores when the raw SE is very small.
+
+An optional **null-thresholding** step (``threshold_null=True``) zeros out per-feature UEIFs with
+negative mean before aggregation, preventing estimation noise from
+artificially deflating group importance.
+
+Previously, this was handled by a separate ``group_importance()`` method,
+which is now deprecated in favor of the more flexible ``conf_int(groups=...)``
+API.
 
 Further Reading
 ---------------

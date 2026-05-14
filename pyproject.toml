@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dfi"
-version = "0.0.1"
-description = "Disentangled Feature Importance"
+name = "fdfi"
+version = "0.0.5"
+description = "Flow-Disentangled Feature Importance"
 readme = "README.md"
 authors = [
     {name = "dfi Team"}
@@ -30,6 +30,10 @@ requires-python = ">=3.8"
 dependencies = [
     "numpy>=1.20.0",
     "scipy>=1.7.0",
+    "scikit-learn>=1.0.0",
+    "matplotlib>=3.5.0",
+    "seaborn>=0.12.0",
+    "statsmodels>=0.13.0",
 ]
 
 [project.optional-dependencies]
@@ -44,19 +48,15 @@ dev = [
 flow = [
     "torch>=2.0.0",
     "torchdiffeq>=0.2.3",
-]
-plots = [
-    "matplotlib>=3.5.0",
-    "seaborn>=0.12.0",
+    "tqdm>=4.60.0",
 ]
 docs = [
     "sphinx>=5.0.0",
     "sphinx-rtd-theme>=1.2.0",
-    "sphinxcontrib-napoleon>=0.7",
 ]
 all = [
     "dev",
-    "plots",
+    "flow",
     "docs",
 ]
 
@@ -67,10 +67,10 @@ Repository = "https://github.com/jaydu1/dfi"
 Issues = "https://github.com/jaydu1/dfi/issues"
 
 [tool.setuptools]
-packages = ["dfi"]
+packages = ["fdfi"]
 
 [tool.setuptools.package-data]
-dfi = ["py.typed"]
+fdfi = ["py.typed"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
@@ -97,7 +97,7 @@ disallow_untyped_defs = false
 disallow_incomplete_defs = false
 
 [tool.coverage.run]
-source = ["dfi"]
+source = ["fdfi"]
 omit = ["tests/*"]
 
 [tool.coverage.report]

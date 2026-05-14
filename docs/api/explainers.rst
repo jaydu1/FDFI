@@ -4,13 +4,13 @@ Explainers
 Overview
 --------
 
-The ``dfi.explainers`` module provides classes for computing flow-disentangled 
+The ``fdfi.explainers`` module provides classes for computing flow-disentangled 
 feature importance. The main classes are:
 
 Base Explainer
 --------------
 
-.. autoclass:: dfi.explainers.Explainer
+.. autoclass:: fdfi.explainers.Explainer
    :members:
    :special-members: __init__, __call__
    :show-inheritance:
@@ -18,7 +18,7 @@ Base Explainer
 Tree-Based Models
 -----------------
 
-.. autoclass:: dfi.explainers.TreeExplainer
+.. autoclass:: fdfi.explainers.TreeExplainer
    :members:
    :special-members: __init__, __call__
    :show-inheritance:
@@ -26,7 +26,7 @@ Tree-Based Models
 Linear Models
 -------------
 
-.. autoclass:: dfi.explainers.LinearExplainer
+.. autoclass:: fdfi.explainers.LinearExplainer
    :members:
    :special-members: __init__, __call__
    :show-inheritance:
@@ -34,7 +34,7 @@ Linear Models
 Kernel Methods
 --------------
 
-.. autoclass:: dfi.explainers.KernelExplainer
+.. autoclass:: fdfi.explainers.KernelExplainer
    :members:
    :special-members: __init__, __call__
    :show-inheritance:
@@ -46,7 +46,7 @@ The ``OTExplainer`` implements Gaussian optimal-transport DFI (Disentangled
 Feature Importance) without cross-fitting. This is the recommended starting 
 point for most use cases.
 
-.. autoclass:: dfi.explainers.OTExplainer
+.. autoclass:: fdfi.explainers.OTExplainer
    :members:
    :special-members: __init__, __call__
    :show-inheritance:
@@ -56,7 +56,7 @@ point for most use cases.
 .. code-block:: python
 
    import numpy as np
-   from dfi.explainers import OTExplainer
+   from fdfi.explainers import OTExplainer
 
    # Create model and data
    def model(X):
@@ -72,6 +72,11 @@ point for most use cases.
    print("Feature importance (X-space):", results["phi_X"])
    print("Standard errors:", results["se_X"])
 
+   # Compute confidence intervals with FDR control (Benjamini-Hochberg)
+   ci = explainer.conf_int(multitest_method='fdr_bh', alpha=0.05)
+   print("Significant features after FDR control:", np.where(ci["reject_null"])[0])
+   print("Adjusted p-values:", ci["pvalue_adj"])
+
 Entropic Optimal Transport (EOTExplainer)
 -----------------------------------------
 
@@ -79,7 +84,7 @@ The ``EOTExplainer`` uses entropic optimal transport with Sinkhorn iterations.
 It supports adaptive epsilon, stochastic transport sampling, and both Gaussian 
 and empirical transport targets.
 
-.. autoclass:: dfi.explainers.EOTExplainer
+.. autoclass:: fdfi.explainers.EOTExplainer
    :members:
    :special-members: __init__, __call__
    :show-inheritance:
@@ -88,7 +93,7 @@ and empirical transport targets.
 
 .. code-block:: python
 
-   from dfi.explainers import EOTExplainer
+   from fdfi.explainers import EOTExplainer
 
    explainer = EOTExplainer(
        model.predict,
@@ -100,11 +105,222 @@ and empirical transport targets.
    )
    results = explainer(X_test)
 
+Shared Disentanglement Diagnostics
+----------------------------------
+
+``OTExplainer``, ``EOTExplainer``, and ``FlowExplainer`` expose a shared
+diagnostics interface via:
+
+- ``explainer.diagnostics`` (computed at setup by default)
+- ``explainer.diagnose(...)`` (recompute manually)
+
+The diagnostics dictionary contains:
+
+- ``latent_independence_dcor`` (pairwise dCor matrix)
+- ``latent_independence_median`` and ``latent_independence_label``
+- ``distribution_fidelity_mmd`` and ``distribution_fidelity_label``
+
+.. code-block:: python
+
+   diag = explainer.diagnostics
+   # or: diag = explainer.diagnose()
+   print(diag["latent_independence_median"], diag["latent_independence_label"])
+   print(diag["distribution_fidelity_mmd"], diag["distribution_fidelity_label"])
+
+Flow-Based DFI (FlowExplainer)
+------------------------------
+
+The ``FlowExplainer`` implements Flow-Disentangled Feature Importance using 
+normalizing flows. It supports both CPI (Conditional Permutation Importance) 
+and SCPI (Sobol-CPI). The key difference is the order of averaging:
+
+- **CPI**: Average predictions first, then squared difference: $(Y - E[f(\tilde{X})])^2$
+- **SCPI**: Squared differences first, then average: $E[(Y - f(\tilde{X}_b))^2]$
+
+.. autoclass:: fdfi.explainers.FlowExplainer
+   :members:
+   :special-members: __init__, __call__
+   :show-inheritance:
+
+**Example with CPI (default):**
+
+.. code-block:: python
+
+   from fdfi.explainers import FlowExplainer
+
+   explainer = FlowExplainer(
+       model.predict,
+       X_background,
+       fit_flow=True,           # Fit normalizing flow during init
+       method='cpi',            # CPI (default)
+       num_steps=200,           # Flow training iterations
+       nsamples=50,             # Monte Carlo samples
+       random_state=42,
+   )
+   results = explainer(X_test)
+
+   print("Z-space importance (CPI):", results["phi_Z"])
+   print("Confidence intervals:")
+   ci = explainer.conf_int(alpha=0.05, target="Z")
+
+**Example with SCPI (Sobol-CPI):**
+
+.. code-block:: python
+
+   from fdfi.explainers import FlowExplainer
+
+   explainer = FlowExplainer(
+       model.predict,
+       X_background,
+       fit_flow=True,
+       method='scpi',           # SCPI (Sobol-CPI)
+       num_steps=200,
+       nsamples=50,
+   )
+   results = explainer(X_test)
+
+   print("Importance (SCPI):", results["phi_Z"])
+
+**Using external flow models:**
+
+.. code-block:: python
+
+   from fdfi.explainers import FlowExplainer
+   from fdfi.models import FlowMatchingModel
+
+   # Train flow externally
+   flow = FlowMatchingModel(X_background, dim=X_background.shape[1])
+   flow.fit(num_steps=500, verbose='final')
+
+   # Use in explainer
+   explainer = FlowExplainer(model.predict, X_background, fit_flow=False)
+   explainer.set_flow(flow)
+   results = explainer(X_test)
+
 DFIExplainer Alias
 ------------------
 
 ``DFIExplainer`` is an alias for ``OTExplainer`` for backward compatibility:
 
-.. data:: dfi.explainers.DFIExplainer
+.. data:: fdfi.explainers.DFIExplainer
 
    Alias for :class:`OTExplainer`.
+
+Cross-Fitting (Crossfitting)
+----------------------------
+
+The ``Crossfitting`` class wraps any of the above explainers and performs
+K-fold cross-fitting so that the disentanglement map is never evaluated on
+its own training data.  This yields valid standard errors and confidence
+intervals even when the sample size is small.
+
+.. autoclass:: fdfi.explainers.Crossfitting
+   :members:
+   :special-members: __init__, __call__
+   :show-inheritance:
+
+**Example — cross-fitted OTExplainer (default KFold):**
+
+.. code-block:: python
+
+   from fdfi.explainers import Crossfitting, OTExplainer
+
+   cf = Crossfitting(
+       model.predict,
+       data=X_background,
+       explainer_class=OTExplainer,
+       cv=5,                    # 5-fold KFold (default)
+       nsamples=50,
+       random_state=42,
+   )
+   results = cf()               # cross-fit on X_background
+   ci = cf.conf_int(alpha=0.05)
+   cf.summary()
+
+**Example — using a custom sklearn splitter:**
+
+.. code-block:: python
+
+   from sklearn.model_selection import StratifiedKFold, ShuffleSplit
+   from fdfi.explainers import Crossfitting, EOTExplainer
+
+   # Stratified K-Fold (preserves class balance)
+   cf = Crossfitting(
+       model.predict, X_background,
+       explainer_class=EOTExplainer,
+       cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=0),
+       y=y_train,               # required for stratification
+       nsamples=50,
+   )
+   results = cf()
+
+   # ShuffleSplit (random train/test splits)
+   cf = Crossfitting(
+       model.predict, X_background,
+       explainer_class=OTExplainer,
+       cv=ShuffleSplit(n_splits=10, test_size=0.2, random_state=0),
+   )
+   results = cf()
+
+**Ensemble prediction on new data:**
+
+.. code-block:: python
+
+   # After cross-fitting, predict on unseen data
+   results_new = cf(X_test)     # averages across all fold explainers
+
+Group Importance
+----------------
+
+All explainer classes support group-level feature importance via the
+``groups`` argument in ``conf_int()``. After running an explainer (so that
+per-sample UEIFs are available), call ``conf_int(groups=...)`` to obtain
+group-level importance, standard errors, and p-values.
+
+Groups can be specified as:
+
+- A ``dict`` mapping group names to lists of feature indices.
+- A 1-D ``numpy`` array of group labels (one per feature).
+- A binary ``pandas.DataFrame`` (features × groups) — features may belong
+  to multiple groups.
+
+**Example — dict input:**
+
+.. code-block:: python
+
+   from fdfi.explainers import OTExplainer
+
+   explainer = OTExplainer(model.predict, X_background, nsamples=50)
+   explainer(X_test)
+
+   groups = {"signal": [0, 1, 2], "noise": [3, 4, 5, 6, 7, 8, 9]}
+   res = explainer.conf_int(groups=groups)
+
+   for name, imp, se, p in zip(
+       res["groups"], res["score"], res["se"], res["pvalue"]
+   ):
+       print(f"{name}: importance={imp:.4f}  se={se:.4f}  p={p:.4f}")
+
+**Example — pandas DataFrame (overlapping groups):**
+
+.. code-block:: python
+
+   import pandas as pd
+
+   # Features can belong to multiple groups
+   df_groups = pd.DataFrame({
+       "group_A": [1, 1, 0, 0, 0],
+       "group_B": [0, 1, 1, 0, 0],   # feature 1 in both A and B
+       "group_C": [0, 0, 0, 1, 1],
+   })
+   res = explainer.conf_int(groups=df_groups)
+
+**Example — with Crossfitting:**
+
+.. code-block:: python
+
+   from fdfi.explainers import Crossfitting, OTExplainer
+
+   cf = Crossfitting(model.predict, X_background, cv=5, nsamples=50)
+   cf()  # cross-fit first
+   res = cf.conf_int(groups={"signal": [0, 1, 2], "noise": [3, 4]})

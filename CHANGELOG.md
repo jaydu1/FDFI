@@ -1,20 +1,23 @@
 # Changelog
 
-## [0.0.1] - 2026-01-31
+## [0.0.5] - 2026-04-28
 ### Added
-- OTExplainer (Gaussian optimal-transport DFI without cross-fitting).
-- EOTExplainer (entropic optimal-transport DFI without cross-fitting).
-- Exp3-based unit tests validating mean/variance aggregation for OT/EOT.
-- Standard error outputs (`se_X`, `se_Z`) for explainer uncertainty.
-- `conf_int` and `summary` methods for confidence intervals with variance-floor and margin adjustments.
-- EOT options for adaptive epsilon, stochastic transport sampling, and Gaussian/empirical targets.
+- **Multiple testing correction**: `conf_int()` and `summary()` now support a `multitest_method` parameter (mimicking `statsmodels`) for controlling FDR/FWER. Adjusted p-values are returned as `pvalue_adj`.
+- **Unified Group Importance**: `conf_int()` now supports a `groups` argument to compute group-level feature importance with uncertainty, replacing the separate `group_importance()` logic (now deprecated).
+  - Accepts groups as a `dict` of index lists, a 1-D label array, or a binary `pandas.DataFrame` indicator matrix (features may belong to multiple groups).
+  - Optional null-feature thresholding (`threshold_null=True`) zeros out per-feature UEIFs with negative mean before aggregation.
+- **Improved API Consistency**: Renamed `phi_hat` to `score` in `conf_int()` output for better clarity.
+- Per-sample UEIFs (`ueifs_X`, `ueifs_Z`) are now stored as instance attributes after calling `OTExplainer`, `EOTExplainer`, and `FlowExplainer`, enabling downstream group aggregation.
 
-### Changed
-- EOT/OT explainers now cache results for post-hoc CI computation via `conf_int`.
-- Exp3 example now uses `conf_int` for CI bands and supports `dfi_USE_EOT` toggle.
-- `environment.yml` now includes plotting + sklearn deps for running examples.
-- Removed legacy `setup.py` and `requirements*.txt` in favor of `pyproject.toml` extras.
+## [0.0.4] - 2026-04-01
+### Added
+- **Crossfitting**: new cross-fitted DFI explainer for valid inference at small sample sizes. Wraps any explainer class (`OTExplainer`, `EOTExplainer`, `FlowExplainer`) and performs K-fold cross-fitting so that the disentanglement map is never evaluated on its own training data.
+- Flexible `cv` parameter accepts an `int` (shorthand for `KFold`) or any scikit-learn splitter instance (`StratifiedKFold`, `ShuffleSplit`, `RepeatedKFold`, `GroupKFold`, custom, etc.).
+- Optional `y` and `groups` parameters for stratified and group-aware splitters.
+- Overlapping test set handling: splitters like `ShuffleSplit` and `RepeatedKFold` that assign samples to multiple test sets are handled by per-sample UEIF averaging.
+- Ensemble prediction on new data: `cf(X_new)` averages importance from all fold explainers.
+- `Crossfitting` inherits `conf_int()` and `summary()` from the base `Explainer` class.
+- `Crossfitting` exported from `fdfi` top-level package.
+- 17 new tests covering init, OT/EOT/Flow cross-fitting, all splitter types, conf_int, summary, and ensemble prediction.
 
-### Changed
-- DFIExplainer is renamed to OTExplainer (DFIExplainer remains as an alias).
-- Explainer can skip flow training via `fit_flow=False`.
+## [0.0.3] - 2026-03-19

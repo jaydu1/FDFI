@@ -382,118 +382,106 @@ def gower_cost_matrix(
 
 def compute_latent_independence(Z: np.ndarray, subset_size: Optional[int] = None) -> Tuple[np.ndarray, float]:
     """
-    Compute pairwise Distance Correlation (dCor) between latent dimensions.
-    
-    Measures statistical independence of latent variables. Lower values indicate
-    higher independence (ideal for disentangled representations).
-    
+    Compute pairwise distance correlation (dCor) between latent dimensions.
+
+    Lower off-diagonal values indicate greater independence of latent factors.
+
     Parameters
     ----------
     Z : np.ndarray
         Latent representations. Shape (n_samples, n_latent_dims).
     subset_size : int, optional
-        If provided, sample this many points for efficiency. If None, use all.
-    
+        If provided and n_samples > subset_size, randomly subsample for efficiency.
+
     Returns
     -------
     dcor_matrix : np.ndarray
         Pairwise distance correlation matrix. Shape (d, d).
     median_dcor : float
-        Median of off-diagonal distance correlations (overall independence score).
+        Median of off-diagonal entries as a single independence score.
     """
     if Z.ndim != 2:
         raise ValueError(f"Z must be 2D, got shape {Z.shape}")
-    
+
     n, d = Z.shape
-    
-    # Sample if needed
+    if d == 0:
+        raise ValueError("Z must have at least one latent dimension")
+    if d == 1:
+        return np.ones((1, 1), dtype=float), 0.0
+
     if subset_size is not None and n > subset_size:
         idx = np.random.choice(n, size=subset_size, replace=False)
         Z = Z[idx]
         n = subset_size
-    
-    # Compute pairwise distances for each dimension
-    dcor_matrix = np.zeros((d, d))
-    
+
+    # Build centered distance matrices once per latent dimension, then
+    # compute all pairwise distance covariances in one matrix multiply.
+    total_entries = d * n * n
+    storage_dtype = np.float32 if total_entries > 25_000_000 else np.float64
+    centered = np.empty((d, n * n), dtype=storage_dtype)
+
     for j in range(d):
-        for k in range(d):
-            if j == k:
-                dcor_matrix[j, k] = 1.0  # Perfect correlation with itself
-            else:
-                # Compute distance correlation between Z[:, j] and Z[:, k]
-                z_j = Z[:, j]
-                z_k = Z[:, k]
-                
-                # Euclidean distance matrices
-                dj = np.abs(z_j[:, None] - z_j[None, :])
-                dk = np.abs(z_k[:, None] - z_k[None, :])
-                
-                # Doubly center the distance matrices
-                row_mean_j = dj.mean(axis=1, keepdims=True)
-                col_mean_j = dj.mean(axis=0, keepdims=True)
-                grand_mean_j = dj.mean()
-                Aj = dj - row_mean_j - col_mean_j + grand_mean_j
-                
-                row_mean_k = dk.mean(axis=1, keepdims=True)
-                col_mean_k = dk.mean(axis=0, keepdims=True)
-                grand_mean_k = dk.mean()
-                Ak = dk - row_mean_k - col_mean_k + grand_mean_k
-                
-                # Distance covariance
-                dcov_jk_sq = (Aj * Ak).sum() / (n * n)
-                dcov_j_sq = (Aj * Aj).sum() / (n * n)
-                dcov_k_sq = (Ak * Ak).sum() / (n * n)
-                
-                # Distance correlation
-                if dcov_j_sq > 0 and dcov_k_sq > 0:
-                    dcor = np.sqrt(dcov_jk_sq / np.sqrt(dcov_j_sq * dcov_k_sq))
-                else:
-                    dcor = 0.0
-                
-                dcor_matrix[j, k] = dcor
-    
-    # Extract off-diagonal median
+        z = np.asarray(Z[:, j], dtype=np.float64)
+        dist = np.abs(z[:, None] - z[None, :])
+        row_mean = dist.mean(axis=1, keepdims=True)
+        centered_dist = dist - row_mean - row_mean.T + dist.mean()
+        centered[j] = centered_dist.reshape(-1)
+
+    dcov_sq = (centered @ centered.T).astype(np.float64, copy=False) / (n * n)
+    dcov_sq = (dcov_sq + dcov_sq.T) * 0.5  # numerical symmetry
+
+    dcov_diag = np.clip(np.diag(dcov_sq), 0.0, None)
+    denom = np.sqrt(np.outer(dcov_diag, dcov_diag))
+    dcor_matrix = np.zeros((d, d), dtype=np.float64)
+    valid = denom > 0
+    dcor_matrix[valid] = np.sqrt(np.clip(dcov_sq[valid], 0.0, None) / denom[valid])
+    np.fill_diagonal(dcor_matrix, 1.0)
+
     mask = ~np.eye(d, dtype=bool)
     off_diag_values = dcor_matrix[mask]
-    median_dcor = np.median(off_diag_values)
-    
+    median_dcor = float(np.median(off_diag_values))
+
     return dcor_matrix, median_dcor
 
 
-def compute_mmd(X_real: np.ndarray, X_generated: np.ndarray, sigma: float = 1.0, 
-                subset_size: Optional[int] = None) -> float:
+def compute_mmd(
+    X_real: np.ndarray,
+    X_generated: np.ndarray,
+    sigma: float = 1.0,
+    subset_size: Optional[int] = None,
+) -> float:
     """
-    Compute Maximum Mean Discrepancy (MMD) with Gaussian RBF kernel.
-    
-    Measures distributional distance between real and generated data.
-    Lower values indicate better fidelity.
-    
+    Compute Maximum Mean Discrepancy (MMD) with a Gaussian RBF kernel.
+
+    Measures distributional distance between real and generated data. Lower
+    values indicate better fidelity.
+
     Parameters
     ----------
     X_real : np.ndarray
         Real data. Shape (n_real, n_features).
     X_generated : np.ndarray
-        Generated/reconstructed data. Shape (n_gen, n_features).
-    sigma : float
-        Bandwidth parameter for Gaussian kernel.
+        Generated or reconstructed data. Shape (n_gen, n_features).
+    sigma : float, default=1.0
+        Bandwidth for the Gaussian kernel.
     subset_size : int, optional
-        Sample this many points from each distribution for efficiency.
-    
+        If provided, subsample each dataset to this size for efficiency.
+
     Returns
     -------
-    mmd : float
-        MMD score (non-negative). Lower is better.
+    float
+        Non-negative MMD score.
     """
     if X_real.ndim != 2 or X_generated.ndim != 2:
         raise ValueError("Both X_real and X_generated must be 2D arrays")
-    
+
     if X_real.shape[1] != X_generated.shape[1]:
         raise ValueError("Feature dimensions must match")
-    
-    n_real = X_real.shape[0]
-    n_gen = X_generated.shape[0]
-    
-    # Sample if needed
+    if sigma <= 0:
+        raise ValueError("sigma must be positive")
+
+    n_real, n_gen = X_real.shape[0], X_generated.shape[0]
+
     if subset_size is not None:
         if n_real > subset_size:
             idx_real = np.random.choice(n_real, size=subset_size, replace=False)
@@ -501,22 +489,26 @@ def compute_mmd(X_real: np.ndarray, X_generated: np.ndarray, sigma: float = 1.0,
         if n_gen > subset_size:
             idx_gen = np.random.choice(n_gen, size=subset_size, replace=False)
             X_generated = X_generated[idx_gen]
-    
-    # Gaussian RBF kernel
-    def gaussian_kernel(x, y, sigma):
-        """Compute Gaussian kernel between two sets of points."""
-        # ||x - y||^2
-        sq_dist = np.sum((x[:, None, :] - y[None, :, :]) ** 2, axis=2)
-        return np.exp(-sq_dist / (2 * sigma ** 2))
-    
-    # Compute kernels
-    K_xx = gaussian_kernel(X_real, X_real, sigma)
-    K_yy = gaussian_kernel(X_generated, X_generated, sigma)
-    K_xy = gaussian_kernel(X_real, X_generated, sigma)
-    
-    # MMD computation
-    n, m = X_real.shape[0], X_generated.shape[0]
-    mmd_sq = (K_xx.sum() / (n * n) + K_yy.sum() / (m * m) - 2 * K_xy.sum() / (n * m))
-    mmd = np.sqrt(np.maximum(mmd_sq, 0.0))  # Clamp to avoid numerical issues
-    
+
+    X_real = np.asarray(X_real, dtype=np.float64)
+    X_generated = np.asarray(X_generated, dtype=np.float64)
+
+    inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma)
+
+    def kernel_mean(x: np.ndarray, y: np.ndarray) -> float:
+        x_sq = np.sum(x * x, axis=1, keepdims=True)
+        y_sq = np.sum(y * y, axis=1, keepdims=True).T
+        sq_dist = x_sq + y_sq - 2.0 * (x @ y.T)
+        np.maximum(sq_dist, 0.0, out=sq_dist)
+        sq_dist *= -inv_two_sigma_sq
+        np.exp(sq_dist, out=sq_dist)
+        return float(sq_dist.mean())
+
+    mmd_sq = (
+        kernel_mean(X_real, X_real)
+        + kernel_mean(X_generated, X_generated)
+        - 2.0 * kernel_mean(X_real, X_generated)
+    )
+    mmd = float(np.sqrt(np.maximum(mmd_sq, 0.0)))
+
     return mmd
