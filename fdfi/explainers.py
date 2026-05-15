@@ -1167,12 +1167,12 @@ class EOTExplainer(Explainer):
         self.Z_full = self.s_fwd * X_whitened
         self._compute_diagnostics(report_title="EOTExplainer")
 
-    def __call__(self, X: np.ndarray, **kwargs: Any) -> dict:
+    def __call__(self, X: np.ndarray, y: Optional[np.ndarray] = None, **kwargs: Any) -> dict:
         n, d = X.shape
         Z = self.s_fwd * (X - self.mean) @ self.L_inv
         y_pred = self.model(X)
 
-        ueifs_Z = self._phi_Z(Z, y_pred)
+        ueifs_Z = self._phi_Z(Z, y_pred, y_true=y)
         ueifs_X = ueifs_Z @ (self.W ** 2).T
 
         # Store per-sample UEIFs for group_importance()
@@ -1191,16 +1191,30 @@ class EOTExplainer(Explainer):
         self._cache_results(results, n)
         return results
 
-    def _phi_Z(self, Z: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+    def _phi_Z(self, Z: np.ndarray, y_pred: np.ndarray, y_true: Optional[np.ndarray] = None) -> np.ndarray:
         """Compute per-sample uncentered UEIF in Z-space via counterfactual resampling.
 
         For each feature j, replaces Z_j with independent draws and measures
-        the squared prediction shift:
+        either the change in squared residuals (DFI paper formula) or the
+        squared prediction shift (CPI formula):
 
-            UEIF_{i,j} = (y_i - ȳ_{-j,i})²
+            DFI formula (y_true provided):
+                UEIF_{i,j} = (y_i - ȳ_{-j,i})² - (y_i - ŷ_i)²
+            CPI formula (default, y_true=None):
+                UEIF_{i,j} = (ŷ_i - ȳ_{-j,i})²
 
-        where ȳ_{-j} is the mean prediction over counterfactual resamples
-        of feature j.
+        The DFI formula is centered near zero for null features and is the
+        formula used in the DFI paper (Williamson & Feng, 2023).
+
+        Parameters
+        ----------
+        Z : (n, d) array
+            EOT-mapped whitened data.
+        y_pred : (n,) array
+            Model predictions on the original X.
+        y_true : (n,) array or None
+            True outcome values.  When provided, uses the DFI formula which
+            enables proper null-feature thresholding.
         """
         n, d = Z.shape
         ueifs_Z = np.zeros((n, d))
@@ -1226,7 +1240,10 @@ class EOTExplainer(Explainer):
             Z_flat = Z_tilde.reshape(-1, d)
             X_tilde = Z_flat @ L_z + self.mean
             y_tilde = self.model(X_tilde).reshape(self.nsamples, n).mean(axis=0)
-            ueifs_Z[:, j] = (y_pred - y_tilde) ** 2
+            if y_true is not None:
+                ueifs_Z[:, j] = (y_true - y_tilde) ** 2 - (y_true - y_pred) ** 2
+            else:
+                ueifs_Z[:, j] = (y_pred - y_tilde) ** 2
 
         return ueifs_Z
 
@@ -2008,10 +2025,18 @@ class Crossfitting(Explainer):
     def _get_persample_ueifs(
         explainer: "Explainer",
         X_test: np.ndarray,
+        y_test: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Compute per-sample UEIFs in both Z- and X-space for *X_test*
         using the fitted *explainer*.
+
+        Parameters
+        ----------
+        y_test : (n_test,) array or None
+            True outcomes for X_test.  When provided to EOTExplainer, uses
+            the DFI formula ``(y - ȳ_{-j})² - (y - ŷ)²`` for proper
+            null-feature thresholding.
 
         Returns
         -------
@@ -2056,7 +2081,7 @@ class Crossfitting(Explainer):
                 ueifs_X = ueifs_Z @ H_sq.T
         elif isinstance(explainer, EOTExplainer):
             Z = explainer.s_fwd * (X_test - explainer.mean) @ explainer.L_inv
-            ueifs_Z = explainer._phi_Z(Z, y_pred)
+            ueifs_Z = explainer._phi_Z(Z, y_pred, y_true=y_test)
             ueifs_X = ueifs_Z @ (explainer.W ** 2).T
         elif isinstance(explainer, OTExplainer):
             Z = (X_test - explainer.mean) @ explainer.L_inv
@@ -2116,6 +2141,10 @@ class Crossfitting(Explainer):
         self.fold_explainers = []
         self.fold_indices = []
 
+        # Detect whether the model is a sklearn-style estimator that should
+        # be cloned and refitted per fold (true cross-fitting of the predictor).
+        _is_estimator = hasattr(self.model, "fit") and hasattr(self.model, "predict")
+
         # Collect per-sample UEIFs; support overlapping test sets
         ueif_counts = np.zeros(n, dtype=int)
         ueifs_X_accum = np.zeros((n, d))
@@ -2124,16 +2153,50 @@ class Crossfitting(Explainer):
         for train_idx, test_idx in self.cv_.split(self.data, self.y, self.groups):
             self.fold_indices.append((train_idx, test_idx))
 
+            if _is_estimator:
+                from sklearn.base import clone
+                if self.y is None:
+                    raise ValueError(
+                        "y must be provided to Crossfitting when model is a "
+                        "sklearn estimator so it can be refitted per fold."
+                    )
+                fold_clf = clone(self.model)
+                fold_clf.fit(self.data[train_idx], self.y[train_idx])
+                if hasattr(fold_clf, "predict_proba"):
+                    fold_model = lambda X_, clf=fold_clf: clf.predict_proba(X_)[:, 1]
+                else:
+                    fold_model = lambda X_, clf=fold_clf: clf.predict(X_)
+            else:
+                fold_model = self.model
+
+            # Build fold explainer on FULL data so that covariance / whitening
+            # uses all n observations (matches refit_cov=False in the reference).
+            # This avoids rank-deficiency when d > n_train (half the data).
+            # After construction, restrict Z_full to the training fold so that
+            # counterfactual resampling only draws from in-fold data.
             fold_exp = self.explainer_class(
-                model=self.model,
-                data=self.data[train_idx],
+                model=fold_model,
+                data=self.data,
                 random_state=self.random_state,
                 **self.cf_kwargs,
             )
+            # Restrict resampling pool to training fold only.
+            if hasattr(fold_exp, "Z_full") and fold_exp.Z_full is not None:
+                if hasattr(fold_exp, "s_fwd"):
+                    fold_exp.Z_full = (
+                        fold_exp.s_fwd
+                        * (self.data[train_idx] - fold_exp.mean)
+                        @ fold_exp.L_inv
+                    )
+                else:
+                    fold_exp.Z_full = (
+                        (self.data[train_idx] - fold_exp.mean) @ fold_exp.L_inv
+                    )
             self.fold_explainers.append(fold_exp)
 
             X_test = self.data[test_idx]
-            ueifs_X_fold, ueifs_Z_fold = self._get_persample_ueifs(fold_exp, X_test)
+            y_test = self.y[test_idx] if self.y is not None else None
+            ueifs_X_fold, ueifs_Z_fold = self._get_persample_ueifs(fold_exp, X_test, y_test=y_test)
 
             # Accumulate (handles overlapping test sets by averaging later)
             for local_i, global_i in enumerate(test_idx):
@@ -2151,14 +2214,30 @@ class Crossfitting(Explainer):
         self.ueifs_Z = ueifs_Z_accum[seen]
         n_eff = int(seen.sum())
 
+        # Null-threshold: zero out features whose mean UEIF is negative
+        # (matches the DFI paper: features with E[UEIF] < 0 have no evidence
+        # of importance and are set to zero before variance estimation)
+        for arr in (self.ueifs_X, self.ueifs_Z):
+            null_mask = arr.mean(axis=0) < 0
+            arr[:, null_mask] = 0.0
+
+        # SE with n_folds correction to match the DFI paper:
+        #   sqn_eff = sqrt(n) * sqrt((n_folds-1)/n_folds)
+        # For n_folds=2 this gives sqn_eff = sqrt(n/2), which is sqrt(2)× larger
+        # than the naive sqrt(n), resulting in more conservative inference.
+        n_folds = getattr(self.cv_, "n_splits", 1)
+        sqn_eff = np.sqrt(n_eff)
+        if n_folds > 1:
+            sqn_eff *= np.sqrt((n_folds - 1) / n_folds)
+
         ddof = 1 if n_eff > 1 else 0
         results = {
             "phi_X": self.ueifs_X.mean(axis=0),
             "std_X": self.ueifs_X.std(axis=0),
-            "se_X": self.ueifs_X.std(axis=0, ddof=ddof) / np.sqrt(n_eff),
+            "se_X": self.ueifs_X.std(axis=0, ddof=ddof) / sqn_eff,
             "phi_Z": self.ueifs_Z.mean(axis=0),
             "std_Z": self.ueifs_Z.std(axis=0),
-            "se_Z": self.ueifs_Z.std(axis=0, ddof=ddof) / np.sqrt(n_eff),
+            "se_Z": self.ueifs_Z.std(axis=0, ddof=ddof) / sqn_eff,
         }
         self._cache_results(results, n_eff)
         return results
