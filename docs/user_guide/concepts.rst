@@ -164,9 +164,35 @@ A key advantage of DFI is **built-in uncertainty quantification**. The
 - Confidence intervals using normal approximation
 - P-values for testing :math:`H_0: \phi_j = 0` or :math:`H_0: \phi_j \leq \delta`
 - Variance floor methods for stable inference with small effects
-- **Score**: the estimated feature importance (mean UEIF)
 - **Multiple Testing Correction**: control of False Discovery Rate (FDR) or
   Family-Wise Error Rate (FWER) via ``multitest_method``.
+
+The returned dictionary includes:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 80
+
+   * - Key
+     - Description
+   * - ``score``
+     - Estimated feature importance (mean UEIF).
+   * - ``se``
+     - Standard error of the mean UEIF (after variance floor).
+   * - ``zscore``
+     - Signed z-statistic: ``(score − margin) / se``.
+   * - ``ranking``
+     - Integer rank by descending z-score (1 = most important).
+   * - ``ci_lower`` / ``ci_upper``
+     - Confidence interval bounds.
+   * - ``reject_null``
+     - Boolean array indicating rejected null hypotheses.
+   * - ``pvalue``
+     - One- or two-sided p-value.
+   * - ``pvalue_adj``
+     - Multiple-testing-adjusted p-values (present when ``multitest_method`` is set).
+   * - ``groups``
+     - List of group names (present when ``groups`` argument is provided).
 
 This enables **statistical feature selection**: identify features that are 
 significantly different from zero or a practical threshold.
