@@ -311,8 +311,10 @@ class Explainer:
         signed_z = (phi_hat - margin) / se_adj
         signed_z = np.where(np.isfinite(signed_z), signed_z, 0.0)
 
-        # Ranking: rank 1 = highest z-score (most important)
-        _order = np.argsort(signed_z)[::-1]
+        # Ranking: rank 1 = highest z-score (most important).
+        # Use a stable descending sort so tied z-scores receive a deterministic,
+        # reproducible order based on their original position.
+        _order = np.argsort(-signed_z, kind="stable")
         ranking = np.empty(len(signed_z), dtype=int)
         ranking[_order] = np.arange(1, len(signed_z) + 1)
 
@@ -2255,8 +2257,11 @@ class Crossfitting(Explainer):
                     )
                 fold_clf = clone(self.model)
                 fold_clf.fit(self.data[train_idx], self.y[train_idx])
-                if hasattr(fold_clf, "predict_proba"):
-                    fold_model = lambda X_, clf=fold_clf: clf.predict_proba(X_)[:, 1]
+                if hasattr(fold_clf, "predict_proba") and hasattr(fold_clf, "classes_"):
+                    if len(fold_clf.classes_) == 2:
+                        fold_model = lambda X_, clf=fold_clf: clf.predict_proba(X_)[:, 1]
+                    else:
+                        fold_model = lambda X_, clf=fold_clf: clf.predict(X_)
                 else:
                     fold_model = lambda X_, clf=fold_clf: clf.predict(X_)
             else:
@@ -2265,10 +2270,9 @@ class Crossfitting(Explainer):
             # Build fold explainer on FULL data so that covariance / whitening
             # uses all n observations (matches refit_cov=False in the reference).
             # This avoids rank-deficiency when d > n_train (half the data).
-            # Diagnostics are suppressed to avoid redundant ODE encoding of all n
-            # samples that would be immediately overwritten when restricting Z_full.
-            # ODE encoding of all n samples (both normal and tight-tolerance) that
-            # would be immediately overwritten when we restrict Z_full below.
+            # Diagnostics are suppressed because ODE encoding of all n samples
+            # (including normal and tight-tolerance variants) would be
+            # immediately overwritten when we restrict Z_full below.
             fold_kwargs = {"compute_diagnostics": False}
             fold_kwargs.update(self.cf_kwargs)
             fold_exp = self.explainer_class(
@@ -2320,10 +2324,14 @@ class Crossfitting(Explainer):
         self.ueifs_Z = ueifs_Z_accum[seen]
         n_eff = int(seen.sum())
 
-        # Null-threshold: zero out features whose mean UEIF is negative
-        # (matches the DFI paper: features with E[UEIF] < 0 have no evidence
-        # of importance and are set to zero before variance estimation)
-        for arr in (self.ueifs_X, self.ueifs_Z):
+        # Null-threshold for _last_results: zero out features whose mean UEIF is
+        # negative (matches the DFI paper: features with E[UEIF] < 0 have no
+        # evidence of importance). Applied to a *copy* so that self.ueifs_X /
+        # self.ueifs_Z remain unthresholded — conf_int(groups=...) can then apply
+        # its own threshold_null flag on the raw per-sample arrays.
+        ueifs_X_thresh = self.ueifs_X.copy()
+        ueifs_Z_thresh = self.ueifs_Z.copy()
+        for arr in (ueifs_X_thresh, ueifs_Z_thresh):
             null_mask = arr.mean(axis=0) < 0
             arr[:, null_mask] = 0.0
 
@@ -2338,12 +2346,12 @@ class Crossfitting(Explainer):
 
         ddof = 1 if n_eff > 1 else 0
         results = {
-            "phi_X": self.ueifs_X.mean(axis=0),
-            "std_X": self.ueifs_X.std(axis=0),
-            "se_X": self.ueifs_X.std(axis=0, ddof=ddof) / sqn_eff,
-            "phi_Z": self.ueifs_Z.mean(axis=0),
-            "std_Z": self.ueifs_Z.std(axis=0),
-            "se_Z": self.ueifs_Z.std(axis=0, ddof=ddof) / sqn_eff,
+            "phi_X": ueifs_X_thresh.mean(axis=0),
+            "std_X": ueifs_X_thresh.std(axis=0),
+            "se_X": ueifs_X_thresh.std(axis=0, ddof=ddof) / sqn_eff,
+            "phi_Z": ueifs_Z_thresh.mean(axis=0),
+            "std_Z": ueifs_Z_thresh.std(axis=0),
+            "se_Z": ueifs_Z_thresh.std(axis=0, ddof=ddof) / sqn_eff,
         }
         self._cache_results(results, n_eff)
         return results

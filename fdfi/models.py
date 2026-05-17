@@ -216,12 +216,13 @@ class FlowMatchingModel:
         out = odeint(odefunc, x0, t, rtol=rtol, atol=atol, method=method)
         return out[-1]  
     
-    def Jacobi_Batch(self, x_batch, t_span=(0, 1), sub_batch=20):
+    def Jacobi_Batch(self, x_batch, t_span=(0, 1)):
         """
         Per-sample Jacobians dX/dZ for a batch of latent-space points.
 
-        Uses the augmented ODE (Jacobi_N) on each sample, processed in
-        sub-batches to keep peak memory bounded.
+        Each sample is processed independently via the augmented ODE
+        (Jacobi_N). Samples are evaluated sequentially; peak memory per
+        call is O(d²) for a single augmented ODE state.
 
         Parameters
         ----------
@@ -229,9 +230,6 @@ class FlowMatchingModel:
             Latent-space (Z) starting points.
         t_span : tuple, default=(0, 1)
             Integration interval (0,1) decodes Z→X.
-        sub_batch : int, default=20
-            Number of samples to process per sub-batch.
-            Memory: sub_batch × d² × 4 bytes  (≈55 MB at sub_batch=20, d=832).
 
         Returns
         -------
@@ -244,12 +242,7 @@ class FlowMatchingModel:
             x_batch = x_batch.detach().cpu().numpy()
         else:
             x_batch = np.asarray(x_batch)
-        n = len(x_batch)
-        Hs = []
-        for i in range(0, n, sub_batch):
-            chunk = x_batch[i:i + sub_batch]
-            for j in range(len(chunk)):
-                Hs.append(self.Jacobi_N(chunk[j], t_span))
+        Hs = [self.Jacobi_N(x_batch[i], t_span) for i in range(len(x_batch))]
         return np.stack(Hs, axis=0)   # (n, d, d)
 
     def Jacobi_N(self, y0, t_span=(0, 1)):

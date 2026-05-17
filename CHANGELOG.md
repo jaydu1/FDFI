@@ -5,7 +5,7 @@
 - **`zscore` and `ranking` output fields**: `conf_int()` now always returns `zscore` (signed z-statistic `(score − margin) / se`) and `ranking` (integer rank by descending z-score, 1 = most important) for all targets and group modes.
 - **`summary()` docstring**: full NumPy-style docstring added, documenting all forwarded `conf_int()` parameters including 0.0.5-introduced `groups` and `multitest_method`.
 - **`Crossfitting` enhancements**: new `cv_kwargs` and `y_test` parameters; improved sklearn estimator detection; null-threshold logic in fold aggregation.
-- **`FlowMatchingModel` improvements**: `dequantize_noise` parameter for binary data augmentation; `sub_batch` parameter in `Jacobi_Batch` for memory control.
+- **`FlowMatchingModel` improvements**: `dequantize_noise` parameter for binary data augmentation; `Jacobi_Batch` now uses a simpler sequential loop (one sample at a time via `Jacobi_N`).
 - **Case study docs**: EOT FDFI case study notebook (`eot_case_study_sens50`) added to documentation under a new Case Studies section.
 - **`docs/user_guide/concepts.rst`**: `conf_int()` return keys documented as a reference table.
 
