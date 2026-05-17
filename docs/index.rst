@@ -79,6 +79,12 @@ Installation
 
 .. toctree::
    :maxdepth: 2
+   :caption: Case Studies
+
+   case_studies/index
+
+.. toctree::
+   :maxdepth: 2
    :caption: API Reference
 
    api/index
