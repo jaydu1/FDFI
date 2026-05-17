@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.0.6] - 2026-05-17
+### Added
+- **`zscore` and `ranking` output fields**: `conf_int()` now always returns `zscore` (signed z-statistic `(score − margin) / se`) and `ranking` (integer rank by descending z-score, 1 = most important) for all targets and group modes.
+- **`summary()` docstring**: full NumPy-style docstring added, documenting all forwarded `conf_int()` parameters including 0.0.5-introduced `groups` and `multitest_method`.
+- **`Crossfitting` enhancements**: new `cv_kwargs` and `y_test` parameters; improved sklearn estimator detection; null-threshold logic in fold aggregation.
+- **`FlowMatchingModel` improvements**: `dequantize_noise` parameter for binary data augmentation; `sub_batch` parameter in `Jacobi_Batch` for memory control.
+- **Case study docs**: EOT FDFI case study notebook (`eot_case_study_sens50`) added to documentation under a new Case Studies section.
+- **`docs/user_guide/concepts.rst`**: `conf_int()` return keys documented as a reference table.
+
+### Fixed
+- `Explainer` class docstring: corrected `from dfi import` → `from fdfi import`.
+- `group_importance()` deprecation version tag corrected from `0.2.0` to `0.0.5`.
+- `_format_summary()`: z-score now computed as `(score − margin) / se` (was `score / se`).
+- `docs/conf.py` `release` field was stale at `0.0.4`; updated to match package version.
+- `Crossfitting` docstring: RST bullet list in parameter description replaced with prose to fix Sphinx rendering error.
+- `docs/tutorials/confidence_intervals.ipynb`: repaired two broken JSON cell boundaries.
+- `MANIFEST.in`: exclude `docs/case_studies/data` and `docs/case_studies/results` from sdist.
+
 ## [0.0.5] - 2026-04-28
 ### Added
 - **Multiple testing correction**: `conf_int()` and `summary()` now support a `multitest_method` parameter (mimicking `statsmodels`) for controlling FDR/FWER. Adjusted p-values are returned as `pvalue_adj`.
