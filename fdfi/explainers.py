@@ -48,7 +48,7 @@ class Explainer:
     Examples
     --------
     >>> import numpy as np
-    >>> from dfi import Explainer
+    >>> from fdfi import Explainer
     >>> 
     >>> # Define a simple model
     >>> def model(x):
@@ -196,10 +196,25 @@ class Explainer:
         Returns
         -------
         dict
-            Dictionary containing 'score', 'se', 'ci_lower', 'ci_upper',
-            'reject_null', 'pvalue', 'margin', and 'alternative'.
-            If `groups` is provided, 'groups' (list of names) is also included.
-            If `multitest_method` is provided, 'pvalue_adj' is also included.
+            Dictionary with the following keys (each an array of length *d* or *G*):
+
+            - ``'score'``: estimated feature importance (mean UEIF).
+            - ``'se'``: standard error of the mean UEIF (after variance floor).
+            - ``'zscore'``: signed z-statistic ``(score - margin) / se``.
+            - ``'ranking'``: integer rank by descending z-score (1 = most important).
+            - ``'ci_lower'``: lower confidence interval bound.
+            - ``'ci_upper'``: upper confidence interval bound.
+            - ``'reject_null'``: boolean array, True where null is rejected.
+            - ``'pvalue'``: two-sided or one-sided p-value.
+            - ``'margin'``: null hypothesis margin used.
+            - ``'margin_method'``: method used to select the margin.
+            - ``'alternative'``: alternative hypothesis string.
+
+            Additional keys added when applicable:
+
+            - ``'groups'``: list of group names (when ``groups`` is provided).
+            - ``'pvalue_adj'``: multiple-testing-adjusted p-values (when
+              ``multitest_method`` is provided).
         """
         if groups is not None:
             if target == "Z":
@@ -292,9 +307,20 @@ class Explainer:
 
             pvalues = np.where(np.isfinite(pvalues), pvalues, 1.0)
 
+        # Signed z-score: (score - margin) / se  (always signed, regardless of alternative)
+        signed_z = (phi_hat - margin) / se_adj
+        signed_z = np.where(np.isfinite(signed_z), signed_z, 0.0)
+
+        # Ranking: rank 1 = highest z-score (most important)
+        _order = np.argsort(signed_z)[::-1]
+        ranking = np.empty(len(signed_z), dtype=int)
+        ranking[_order] = np.arange(1, len(signed_z) + 1)
+
         out = {
             "score": phi_hat,
             "se": se_adj,
+            "zscore": signed_z,
+            "ranking": ranking,
             "ci_lower": ci_lower,
             "ci_upper": ci_upper,
             "reject_null": reject_null,
@@ -407,6 +433,58 @@ class Explainer:
         return margin
 
     def summary(self, alpha: float = 0.05, print_output: bool = True, **kwargs) -> str:
+        """
+        Print and return a formatted feature importance summary table.
+
+        Computes confidence intervals via :meth:`conf_int` and formats the
+        results as a human-readable table.  Supports both individual-feature
+        and group-level summaries, as well as multiple-testing correction.
+
+        Parameters
+        ----------
+        alpha : float, default=0.05
+            Significance level passed to :meth:`conf_int`.
+        print_output : bool, default=True
+            If ``True``, print the table to stdout.
+        **kwargs
+            All keyword arguments are forwarded to :meth:`conf_int`.  Common
+            options include:
+
+            - ``target`` (``'X'`` or ``'Z'``) — which feature space to report.
+            - ``groups`` — dict, 1-D array, or binary DataFrame for group-level
+              summaries (new in 0.0.5).
+            - ``multitest_method`` — e.g. ``'bonferroni'``, ``'fdr_bh'`` for
+              multiple-testing correction (new in 0.0.5).
+            - ``threshold_null`` — zero out negative-mean UEIFs before group
+              aggregation (new in 0.0.5).
+            - ``var_floor_method``, ``var_floor_c``, ``var_floor_quantile``
+            - ``margin``, ``margin_method``, ``margin_quantile``
+            - ``alternative`` (``'two-sided'``, ``'greater'``, ``'less'``)
+            - ``verbose``
+
+        Returns
+        -------
+        str
+            The formatted summary string (same text that is printed when
+            ``print_output=True``).
+
+        Examples
+        --------
+        Individual-feature summary::
+
+            explainer(X_test, y=y_test)
+            explainer.summary(alpha=0.05, target="X")
+
+        Group-level summary with Bonferroni correction::
+
+            explainer.summary(
+                alpha=0.05,
+                target="X",
+                groups=df_groups,
+                threshold_null=True,
+                multitest_method="bonferroni",
+            )
+        """
         results = self.conf_int(alpha=alpha, **kwargs)
         return self._format_summary(results, alpha, print_output)
 
@@ -442,7 +520,7 @@ class Explainer:
     ) -> dict:
         """Compute group-level feature importance with uncertainty.
 
-        .. deprecated:: 0.2.0
+        .. deprecated:: 0.0.5
             Use :meth:`conf_int` with the ``groups`` argument instead.
 
         Parameters
@@ -491,7 +569,7 @@ class Explainer:
             "groups": np.array(results["groups"]),
             "importance": results["score"],
             "se": results["se"],
-            "zscore": results["score"] / results["se"],
+            "zscore": results["zscore"],
             "pvalue": results["pvalue"],
         }
 
@@ -1429,10 +1507,14 @@ class FlowExplainer(Explainer):
         self.Z_full = None
         
         if flow_model is not None:
-            # Use provided flow model
-            self._encode_background()
-            if self.Z_full is not None:
-                self._refresh_flow_diagnostics()
+            # Use provided flow model.
+            # When compute_diagnostics=False (e.g. inside Crossfitting._crossfit),
+            # skip both the full-data encoding and the expensive high-precision
+            # diagnostic encoding — Z_full will be set externally by _crossfit.
+            if self.compute_diagnostics:
+                self._encode_background()
+                if self.Z_full is not None:
+                    self._refresh_flow_diagnostics()
         elif fit_flow and data is not None:
             # Create and fit default flow model
             self.fit_flow(num_steps=kwargs.get("num_steps", 5000), verbose=self.verbose)
@@ -1942,12 +2024,12 @@ class Crossfitting(Explainer):
         The explainer class to instantiate per split.  Must be a subclass
         of Explainer (e.g., OTExplainer, EOTExplainer, FlowExplainer).
     cv : int or sklearn cross-validation splitter, default=5
-        Controls how data is split for cross-fitting:
-        - int: number of folds for ``KFold(shuffle=True)``.
-        - sklearn splitter instance: used directly, e.g. ``KFold``,
-          ``StratifiedKFold``, ``ShuffleSplit``, ``RepeatedKFold``,
-          ``GroupKFold``, etc.
-        Any object implementing ``.split(X, y, groups)`` is accepted.
+        Controls how data is split for cross-fitting.
+        Pass an ``int`` for ``KFold(n_splits=cv, shuffle=True)``,
+        or any scikit-learn splitter instance (e.g. ``KFold``,
+        ``StratifiedKFold``, ``ShuffleSplit``, ``RepeatedKFold``,
+        ``GroupKFold``).  Any object implementing
+        ``.split(X, y, groups)`` is accepted.
     y : array-like of shape (n,), optional
         Target / response variable.  Required only when using a stratified
         splitter so that fold assignment preserves class distribution.
@@ -1984,13 +2066,22 @@ class Crossfitting(Explainer):
         cv: Union[int, Any] = 5,
         y: Optional[np.ndarray] = None,
         groups: Optional[np.ndarray] = None,
+        cv_kwargs: Optional[dict] = None,
         random_state: Optional[int] = None,
         **kwargs: Any,
     ):
+        # Remove fit_flow from kwargs before passing to super() and child explainers
+        # so it doesn't conflict with the hardcoded fit_flow=False below.
+        kwargs.pop("fit_flow", None)
         super().__init__(model, data, fit_flow=False, **kwargs)
         self.explainer_class = explainer_class
         self.y = np.asarray(y) if y is not None else None
         self.groups = np.asarray(groups) if groups is not None else None
+        # cv_kwargs: extra keyword arguments forwarded to cv.split().
+        # Overrides the defaults (y=self.y, groups=self.groups).
+        # Use case: pass discrete class labels to StratifiedKFold when y
+        # is continuous (e.g. standardized), e.g. cv_kwargs={"y": y_binary}.
+        self.cv_kwargs = cv_kwargs or {}
         self.random_state = random_state
         self.cf_kwargs = kwargs
 
@@ -2150,7 +2241,9 @@ class Crossfitting(Explainer):
         ueifs_X_accum = np.zeros((n, d))
         ueifs_Z_accum = np.zeros((n, d))
 
-        for train_idx, test_idx in self.cv_.split(self.data, self.y, self.groups):
+        _split_kw = {"y": self.y, "groups": self.groups}
+        _split_kw.update(self.cv_kwargs)
+        for train_idx, test_idx in self.cv_.split(self.data, **_split_kw):
             self.fold_indices.append((train_idx, test_idx))
 
             if _is_estimator:
@@ -2172,26 +2265,39 @@ class Crossfitting(Explainer):
             # Build fold explainer on FULL data so that covariance / whitening
             # uses all n observations (matches refit_cov=False in the reference).
             # This avoids rank-deficiency when d > n_train (half the data).
-            # After construction, restrict Z_full to the training fold so that
-            # counterfactual resampling only draws from in-fold data.
+            # Diagnostics are suppressed to avoid redundant ODE encoding of all n
+            # samples that would be immediately overwritten when restricting Z_full.
+            # ODE encoding of all n samples (both normal and tight-tolerance) that
+            # would be immediately overwritten when we restrict Z_full below.
+            fold_kwargs = {"compute_diagnostics": False}
+            fold_kwargs.update(self.cf_kwargs)
             fold_exp = self.explainer_class(
                 model=fold_model,
                 data=self.data,
                 random_state=self.random_state,
-                **self.cf_kwargs,
+                **fold_kwargs,
             )
             # Restrict resampling pool to training fold only.
-            if hasattr(fold_exp, "Z_full") and fold_exp.Z_full is not None:
-                if hasattr(fold_exp, "s_fwd"):
-                    fold_exp.Z_full = (
-                        fold_exp.s_fwd
-                        * (self.data[train_idx] - fold_exp.mean)
-                        @ fold_exp.L_inv
-                    )
-                else:
-                    fold_exp.Z_full = (
-                        (self.data[train_idx] - fold_exp.mean) @ fold_exp.L_inv
-                    )
+            if hasattr(fold_exp, "s_fwd"):
+                # EOT: analytical forward map (scale * whitening)
+                fold_exp.Z_full = (
+                    fold_exp.s_fwd
+                    * (self.data[train_idx] - fold_exp.mean)
+                    @ fold_exp.L_inv
+                )
+            elif hasattr(fold_exp, "_encode_to_Z"):
+                # FlowExplainer: encode training-fold samples through the flow.
+                # The flow itself was trained on all data (full n); only the
+                # resampling pool is restricted to in-fold rows so that
+                # counterfactual draws respect the cross-fitting split.
+                # Z_full may be None here (skipped _encode_background above)
+                # — that is expected; we set it now.
+                fold_exp.Z_full = fold_exp._encode_to_Z(self.data[train_idx])
+            elif hasattr(fold_exp, "Z_full") and fold_exp.Z_full is not None:
+                # OT / generic linear map (mean + L_inv attributes)
+                fold_exp.Z_full = (
+                    (self.data[train_idx] - fold_exp.mean) @ fold_exp.L_inv
+                )
             self.fold_explainers.append(fold_exp)
 
             X_test = self.data[test_idx]
