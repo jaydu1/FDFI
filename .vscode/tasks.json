@@ -1,0 +1,37 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build Sphinx Docs",
+			"type": "shell",
+			"command": "cd docs && make html",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Clean and Build Sphinx Docs",
+			"type": "shell",
+			"command": "cd docs && make clean && make html 2>&1",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Sphinx Build Direct",
+			"type": "shell",
+			"command": "sphinx-build -b html docs/ docs/_build/html/ -E 2>&1",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Check Sphinx Python",
+			"type": "shell",
+			"command": "python -c \"import sphinx; print(sphinx.__version__)\" && python -m sphinx --version 2>&1",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}

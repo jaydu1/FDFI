@@ -48,7 +48,7 @@ class Explainer:
     Examples
     --------
     >>> import numpy as np
-    >>> from fdfi.explainers import Explainer
+    >>> from fdfi import Explainer
     >>> 
     >>> # Define a simple model
     >>> def model(x):
@@ -196,10 +196,25 @@ class Explainer:
         Returns
         -------
         dict
-            Dictionary containing 'score', 'se', 'ci_lower', 'ci_upper',
-            'reject_null', 'pvalue', 'margin', and 'alternative'.
-            If `groups` is provided, 'groups' (list of names) is also included.
-            If `multitest_method` is provided, 'pvalue_adj' is also included.
+            Dictionary with the following keys (each an array of length *d* or *G*):
+
+            - ``'score'``: estimated feature importance (mean UEIF).
+            - ``'se'``: standard error of the mean UEIF (after variance floor).
+            - ``'zscore'``: signed z-statistic ``(score - margin) / se``.
+            - ``'ranking'``: integer rank by descending z-score (1 = most important).
+            - ``'ci_lower'``: lower confidence interval bound.
+            - ``'ci_upper'``: upper confidence interval bound.
+            - ``'reject_null'``: boolean array, True where null is rejected.
+            - ``'pvalue'``: two-sided or one-sided p-value.
+            - ``'margin'``: null hypothesis margin used.
+            - ``'margin_method'``: method used to select the margin.
+            - ``'alternative'``: alternative hypothesis string.
+
+            Additional keys added when applicable:
+
+            - ``'groups'``: list of group names (when ``groups`` is provided).
+            - ``'pvalue_adj'``: multiple-testing-adjusted p-values (when
+              ``multitest_method`` is provided).
         """
         if groups is not None:
             if target == "Z":
@@ -292,9 +307,22 @@ class Explainer:
 
             pvalues = np.where(np.isfinite(pvalues), pvalues, 1.0)
 
+        # Signed z-score: (score - margin) / se  (always signed, regardless of alternative)
+        signed_z = (phi_hat - margin) / se_adj
+        signed_z = np.where(np.isfinite(signed_z), signed_z, 0.0)
+
+        # Ranking: rank 1 = highest z-score (most important).
+        # Use a stable descending sort so tied z-scores receive a deterministic,
+        # reproducible order based on their original position.
+        _order = np.argsort(-signed_z, kind="stable")
+        ranking = np.empty(len(signed_z), dtype=int)
+        ranking[_order] = np.arange(1, len(signed_z) + 1)
+
         out = {
             "score": phi_hat,
             "se": se_adj,
+            "zscore": signed_z,
+            "ranking": ranking,
             "ci_lower": ci_lower,
             "ci_upper": ci_upper,
             "reject_null": reject_null,
@@ -407,6 +435,58 @@ class Explainer:
         return margin
 
     def summary(self, alpha: float = 0.05, print_output: bool = True, **kwargs) -> str:
+        """
+        Print and return a formatted feature importance summary table.
+
+        Computes confidence intervals via :meth:`conf_int` and formats the
+        results as a human-readable table.  Supports both individual-feature
+        and group-level summaries, as well as multiple-testing correction.
+
+        Parameters
+        ----------
+        alpha : float, default=0.05
+            Significance level passed to :meth:`conf_int`.
+        print_output : bool, default=True
+            If ``True``, print the table to stdout.
+        **kwargs
+            All keyword arguments are forwarded to :meth:`conf_int`.  Common
+            options include:
+
+            - ``target`` (``'X'`` or ``'Z'``) — which feature space to report.
+            - ``groups`` — dict, 1-D array, or binary DataFrame for group-level
+              summaries (new in 0.0.5).
+            - ``multitest_method`` — e.g. ``'bonferroni'``, ``'fdr_bh'`` for
+              multiple-testing correction (new in 0.0.5).
+            - ``threshold_null`` — zero out negative-mean UEIFs before group
+              aggregation (new in 0.0.5).
+            - ``var_floor_method``, ``var_floor_c``, ``var_floor_quantile``
+            - ``margin``, ``margin_method``, ``margin_quantile``
+            - ``alternative`` (``'two-sided'``, ``'greater'``, ``'less'``)
+            - ``verbose``
+
+        Returns
+        -------
+        str
+            The formatted summary string (same text that is printed when
+            ``print_output=True``).
+
+        Examples
+        --------
+        Individual-feature summary::
+
+            explainer(X_test, y=y_test)
+            explainer.summary(alpha=0.05, target="X")
+
+        Group-level summary with Bonferroni correction::
+
+            explainer.summary(
+                alpha=0.05,
+                target="X",
+                groups=df_groups,
+                threshold_null=True,
+                multitest_method="bonferroni",
+            )
+        """
         results = self.conf_int(alpha=alpha, **kwargs)
         return self._format_summary(results, alpha, print_output)
 
@@ -442,7 +522,7 @@ class Explainer:
     ) -> dict:
         """Compute group-level feature importance with uncertainty.
 
-        .. deprecated:: 0.2.0
+        .. deprecated:: 0.0.5
             Use :meth:`conf_int` with the ``groups`` argument instead.
 
         Parameters
@@ -491,7 +571,7 @@ class Explainer:
             "groups": np.array(results["groups"]),
             "importance": results["score"],
             "se": results["se"],
-            "zscore": results["score"] / results["se"],
+            "zscore": results["zscore"],
             "pvalue": results["pvalue"],
         }
 
@@ -1167,12 +1247,12 @@ class EOTExplainer(Explainer):
         self.Z_full = self.s_fwd * X_whitened
         self._compute_diagnostics(report_title="EOTExplainer")
 
-    def __call__(self, X: np.ndarray, **kwargs: Any) -> dict:
+    def __call__(self, X: np.ndarray, y: Optional[np.ndarray] = None, **kwargs: Any) -> dict:
         n, d = X.shape
         Z = self.s_fwd * (X - self.mean) @ self.L_inv
         y_pred = self.model(X)
 
-        ueifs_Z = self._phi_Z(Z, y_pred)
+        ueifs_Z = self._phi_Z(Z, y_pred, y_true=y)
         ueifs_X = ueifs_Z @ (self.W ** 2).T
 
         # Store per-sample UEIFs for group_importance()
@@ -1191,16 +1271,30 @@ class EOTExplainer(Explainer):
         self._cache_results(results, n)
         return results
 
-    def _phi_Z(self, Z: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+    def _phi_Z(self, Z: np.ndarray, y_pred: np.ndarray, y_true: Optional[np.ndarray] = None) -> np.ndarray:
         """Compute per-sample uncentered UEIF in Z-space via counterfactual resampling.
 
         For each feature j, replaces Z_j with independent draws and measures
-        the squared prediction shift:
+        either the change in squared residuals (DFI paper formula) or the
+        squared prediction shift (CPI formula):
 
-            UEIF_{i,j} = (y_i - ȳ_{-j,i})²
+            DFI formula (y_true provided):
+                UEIF_{i,j} = (y_i - ȳ_{-j,i})² - (y_i - ŷ_i)²
+            CPI formula (default, y_true=None):
+                UEIF_{i,j} = (ŷ_i - ȳ_{-j,i})²
 
-        where ȳ_{-j} is the mean prediction over counterfactual resamples
-        of feature j.
+        The DFI formula is centered near zero for null features and is the
+        formula used in the DFI paper (Williamson & Feng, 2023).
+
+        Parameters
+        ----------
+        Z : (n, d) array
+            EOT-mapped whitened data.
+        y_pred : (n,) array
+            Model predictions on the original X.
+        y_true : (n,) array or None
+            True outcome values.  When provided, uses the DFI formula which
+            enables proper null-feature thresholding.
         """
         n, d = Z.shape
         ueifs_Z = np.zeros((n, d))
@@ -1226,7 +1320,10 @@ class EOTExplainer(Explainer):
             Z_flat = Z_tilde.reshape(-1, d)
             X_tilde = Z_flat @ L_z + self.mean
             y_tilde = self.model(X_tilde).reshape(self.nsamples, n).mean(axis=0)
-            ueifs_Z[:, j] = (y_pred - y_tilde) ** 2
+            if y_true is not None:
+                ueifs_Z[:, j] = (y_true - y_tilde) ** 2 - (y_true - y_pred) ** 2
+            else:
+                ueifs_Z[:, j] = (y_pred - y_tilde) ** 2
 
         return ueifs_Z
 
@@ -1412,10 +1509,14 @@ class FlowExplainer(Explainer):
         self.Z_full = None
         
         if flow_model is not None:
-            # Use provided flow model
-            self._encode_background()
-            if self.Z_full is not None:
-                self._refresh_flow_diagnostics()
+            # Use provided flow model.
+            # When compute_diagnostics=False (e.g. inside Crossfitting._crossfit),
+            # skip both the full-data encoding and the expensive high-precision
+            # diagnostic encoding — Z_full will be set externally by _crossfit.
+            if self.compute_diagnostics:
+                self._encode_background()
+                if self.Z_full is not None:
+                    self._refresh_flow_diagnostics()
         elif fit_flow and data is not None:
             # Create and fit default flow model
             self.fit_flow(num_steps=kwargs.get("num_steps", 5000), verbose=self.verbose)
@@ -1487,7 +1588,9 @@ class FlowExplainer(Explainer):
         self.verbose = _verbose
         if _verbose is True or _verbose == 'all' or _verbose == 'final':
             self._log("Training flow model...", level="info")
-        self.flow_model.fit(num_steps=num_steps, verbose=_verbose, **kwargs)
+        _dequantize_noise = kwargs.pop("dequantize_noise", self.kwargs.get("dequantize_noise", 0.0))
+        self.flow_model.fit(num_steps=num_steps, verbose=_verbose,
+                            dequantize_noise=_dequantize_noise, **kwargs)
         
         # Encode background data
         self._encode_background()
@@ -1797,17 +1900,29 @@ class FlowExplainer(Explainer):
         # Compute both CPI and SCPI in Z-space (per-sample UEIFs)
         ueifs_cpi, ueifs_scpi = self._phi_Z(Z, y_pred)
         
-        # Compute Jacobian H = dX/dZ (averaged over samples)
-        H = self._compute_jacobian(Z)
-        
-        # Sensitivity matrix: H_sq[l,k] = H[l,k]^2
-        # Maps Z-space importance to X-space: phi_X[l] = sum_k H[l,k]^2 * phi_Z[k]
-        H_sq = H ** 2
-        
-        # Transform per-sample UEIFs from Z-space to X-space
-        # ueifs_X[i, l] = sum_k H_sq[l, k] * ueifs_Z[i, k]
-        ueifs_cpi_X = ueifs_cpi @ H_sq.T
-        ueifs_scpi_X = ueifs_scpi @ H_sq.T
+        # Transform per-sample UEIFs from Z-space to X-space via Jacobian H = dX/dZ
+        # ueifs_X[i, l] = sum_k H[l,k]^2 * ueifs_Z[i, k]
+        jacobian_mode = self.kwargs.get("jacobian_mode", "average")
+        n_jac = self.kwargs.get("jacobian_n_samples", 100)
+        if jacobian_mode == "per_sample":
+            # Per-sample Jacobians: H_batch[i] = dX/dZ at Z[i]
+            H_batch = self.flow_model.Jacobi_Batch(Z)   # (n, d, d)
+            H_sq_batch = H_batch ** 2
+            ueifs_cpi_X  = np.einsum("ilk,ik->il", H_sq_batch, ueifs_cpi)
+            ueifs_scpi_X = np.einsum("ilk,ik->il", H_sq_batch, ueifs_scpi)
+        elif jacobian_mode == "avg_sq":
+            # Average of squared Jacobians: E[H_i^2] — correct for binary data.
+            # Avoids the cancellation in E[H_i]^2 for sign-flipping features.
+            n_est = min(n, n_jac)
+            H_batch = self.flow_model.Jacobi_Batch(Z[:n_est])  # (n_est, d, d)
+            H_sq_avg = (H_batch ** 2).mean(axis=0)              # (d, d)
+            ueifs_cpi_X  = ueifs_cpi  @ H_sq_avg.T
+            ueifs_scpi_X = ueifs_scpi @ H_sq_avg.T
+        else:  # "average" — existing behaviour, backward-compatible
+            H = self._compute_jacobian(Z)
+            H_sq = H ** 2
+            ueifs_cpi_X  = ueifs_cpi  @ H_sq.T
+            ueifs_scpi_X = ueifs_scpi @ H_sq.T
         
         # Store per-sample UEIFs for group_importance()
         if self.method == "scpi":
@@ -1911,12 +2026,12 @@ class Crossfitting(Explainer):
         The explainer class to instantiate per split.  Must be a subclass
         of Explainer (e.g., OTExplainer, EOTExplainer, FlowExplainer).
     cv : int or sklearn cross-validation splitter, default=5
-        Controls how data is split for cross-fitting:
-        - int: number of folds for ``KFold(shuffle=True)``.
-        - sklearn splitter instance: used directly, e.g. ``KFold``,
-          ``StratifiedKFold``, ``ShuffleSplit``, ``RepeatedKFold``,
-          ``GroupKFold``, etc.
-        Any object implementing ``.split(X, y, groups)`` is accepted.
+        Controls how data is split for cross-fitting.
+        Pass an ``int`` for ``KFold(n_splits=cv, shuffle=True)``,
+        or any scikit-learn splitter instance (e.g. ``KFold``,
+        ``StratifiedKFold``, ``ShuffleSplit``, ``RepeatedKFold``,
+        ``GroupKFold``).  Any object implementing
+        ``.split(X, y, groups)`` is accepted.
     y : array-like of shape (n,), optional
         Target / response variable.  Required only when using a stratified
         splitter so that fold assignment preserves class distribution.
@@ -1953,13 +2068,22 @@ class Crossfitting(Explainer):
         cv: Union[int, Any] = 5,
         y: Optional[np.ndarray] = None,
         groups: Optional[np.ndarray] = None,
+        cv_kwargs: Optional[dict] = None,
         random_state: Optional[int] = None,
         **kwargs: Any,
     ):
+        # Remove fit_flow from kwargs before passing to super() and child explainers
+        # so it doesn't conflict with the hardcoded fit_flow=False below.
+        kwargs.pop("fit_flow", None)
         super().__init__(model, data, fit_flow=False, **kwargs)
         self.explainer_class = explainer_class
         self.y = np.asarray(y) if y is not None else None
         self.groups = np.asarray(groups) if groups is not None else None
+        # cv_kwargs: extra keyword arguments forwarded to cv.split().
+        # Overrides the defaults (y=self.y, groups=self.groups).
+        # Use case: pass discrete class labels to StratifiedKFold when y
+        # is continuous (e.g. standardized), e.g. cv_kwargs={"y": y_binary}.
+        self.cv_kwargs = cv_kwargs or {}
         self.random_state = random_state
         self.cf_kwargs = kwargs
 
@@ -1994,10 +2118,18 @@ class Crossfitting(Explainer):
     def _get_persample_ueifs(
         explainer: "Explainer",
         X_test: np.ndarray,
+        y_test: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Compute per-sample UEIFs in both Z- and X-space for *X_test*
         using the fitted *explainer*.
+
+        Parameters
+        ----------
+        y_test : (n_test,) array or None
+            True outcomes for X_test.  When provided to EOTExplainer, uses
+            the DFI formula ``(y - ȳ_{-j})² - (y - ŷ)²`` for proper
+            null-feature thresholding.
 
         Returns
         -------
@@ -2011,16 +2143,38 @@ class Crossfitting(Explainer):
             X_hat = explainer._decode_to_X(Z)
             y_pred = explainer.model(X_hat)
             ueifs_cpi, ueifs_scpi = explainer._phi_Z(Z, y_pred)
-            H = explainer._compute_jacobian(Z)
-            H_sq = H ** 2
-            if explainer.method == "scpi":
-                ueifs_Z = ueifs_scpi
+            jacobian_mode = explainer.kwargs.get("jacobian_mode", "average")
+            n_jac = explainer.kwargs.get("jacobian_n_samples", 100)
+            n_test = Z.shape[0]
+            if jacobian_mode == "per_sample":
+                H_batch = explainer.flow_model.Jacobi_Batch(Z)   # (n, d, d)
+                H_sq_batch = H_batch ** 2
+                if explainer.method == "scpi":
+                    ueifs_Z = ueifs_scpi
+                    ueifs_X = np.einsum("ilk,ik->il", H_sq_batch, ueifs_scpi)
+                else:
+                    ueifs_Z = ueifs_cpi
+                    ueifs_X = np.einsum("ilk,ik->il", H_sq_batch, ueifs_cpi)
+            elif jacobian_mode == "avg_sq":
+                n_est = min(n_test, n_jac)
+                H_batch = explainer.flow_model.Jacobi_Batch(Z[:n_est])  # (n_est, d, d)
+                H_sq_avg = (H_batch ** 2).mean(axis=0)                   # (d, d)
+                if explainer.method == "scpi":
+                    ueifs_Z = ueifs_scpi
+                else:
+                    ueifs_Z = ueifs_cpi
+                ueifs_X = ueifs_Z @ H_sq_avg.T
             else:
-                ueifs_Z = ueifs_cpi
-            ueifs_X = ueifs_Z @ H_sq.T
+                H = explainer._compute_jacobian(Z)
+                H_sq = H ** 2
+                if explainer.method == "scpi":
+                    ueifs_Z = ueifs_scpi
+                else:
+                    ueifs_Z = ueifs_cpi
+                ueifs_X = ueifs_Z @ H_sq.T
         elif isinstance(explainer, EOTExplainer):
             Z = explainer.s_fwd * (X_test - explainer.mean) @ explainer.L_inv
-            ueifs_Z = explainer._phi_Z(Z, y_pred)
+            ueifs_Z = explainer._phi_Z(Z, y_pred, y_true=y_test)
             ueifs_X = ueifs_Z @ (explainer.W ** 2).T
         elif isinstance(explainer, OTExplainer):
             Z = (X_test - explainer.mean) @ explainer.L_inv
@@ -2080,24 +2234,79 @@ class Crossfitting(Explainer):
         self.fold_explainers = []
         self.fold_indices = []
 
+        # Detect whether the model is a sklearn-style estimator that should
+        # be cloned and refitted per fold (true cross-fitting of the predictor).
+        _is_estimator = hasattr(self.model, "fit") and hasattr(self.model, "predict")
+
         # Collect per-sample UEIFs; support overlapping test sets
         ueif_counts = np.zeros(n, dtype=int)
         ueifs_X_accum = np.zeros((n, d))
         ueifs_Z_accum = np.zeros((n, d))
 
-        for train_idx, test_idx in self.cv_.split(self.data, self.y, self.groups):
+        _split_kw = {"y": self.y, "groups": self.groups}
+        _split_kw.update(self.cv_kwargs)
+        for train_idx, test_idx in self.cv_.split(self.data, **_split_kw):
             self.fold_indices.append((train_idx, test_idx))
 
+            if _is_estimator:
+                from sklearn.base import clone
+                if self.y is None:
+                    raise ValueError(
+                        "y must be provided to Crossfitting when model is a "
+                        "sklearn estimator so it can be refitted per fold."
+                    )
+                fold_clf = clone(self.model)
+                fold_clf.fit(self.data[train_idx], self.y[train_idx])
+                if hasattr(fold_clf, "predict_proba") and hasattr(fold_clf, "classes_"):
+                    if len(fold_clf.classes_) == 2:
+                        fold_model = lambda X_, clf=fold_clf: clf.predict_proba(X_)[:, 1]
+                    else:
+                        fold_model = lambda X_, clf=fold_clf: clf.predict(X_)
+                else:
+                    fold_model = lambda X_, clf=fold_clf: clf.predict(X_)
+            else:
+                fold_model = self.model
+
+            # Build fold explainer on FULL data so that covariance / whitening
+            # uses all n observations (matches refit_cov=False in the reference).
+            # This avoids rank-deficiency when d > n_train (half the data).
+            # Diagnostics are suppressed because ODE encoding of all n samples
+            # (including normal and tight-tolerance variants) would be
+            # immediately overwritten when we restrict Z_full below.
+            fold_kwargs = {"compute_diagnostics": False}
+            fold_kwargs.update(self.cf_kwargs)
             fold_exp = self.explainer_class(
-                model=self.model,
-                data=self.data[train_idx],
+                model=fold_model,
+                data=self.data,
                 random_state=self.random_state,
-                **self.cf_kwargs,
+                **fold_kwargs,
             )
+            # Restrict resampling pool to training fold only.
+            if hasattr(fold_exp, "s_fwd"):
+                # EOT: analytical forward map (scale * whitening)
+                fold_exp.Z_full = (
+                    fold_exp.s_fwd
+                    * (self.data[train_idx] - fold_exp.mean)
+                    @ fold_exp.L_inv
+                )
+            elif hasattr(fold_exp, "_encode_to_Z"):
+                # FlowExplainer: encode training-fold samples through the flow.
+                # The flow itself was trained on all data (full n); only the
+                # resampling pool is restricted to in-fold rows so that
+                # counterfactual draws respect the cross-fitting split.
+                # Z_full may be None here (skipped _encode_background above)
+                # — that is expected; we set it now.
+                fold_exp.Z_full = fold_exp._encode_to_Z(self.data[train_idx])
+            elif hasattr(fold_exp, "Z_full") and fold_exp.Z_full is not None:
+                # OT / generic linear map (mean + L_inv attributes)
+                fold_exp.Z_full = (
+                    (self.data[train_idx] - fold_exp.mean) @ fold_exp.L_inv
+                )
             self.fold_explainers.append(fold_exp)
 
             X_test = self.data[test_idx]
-            ueifs_X_fold, ueifs_Z_fold = self._get_persample_ueifs(fold_exp, X_test)
+            y_test = self.y[test_idx] if self.y is not None else None
+            ueifs_X_fold, ueifs_Z_fold = self._get_persample_ueifs(fold_exp, X_test, y_test=y_test)
 
             # Accumulate (handles overlapping test sets by averaging later)
             for local_i, global_i in enumerate(test_idx):
@@ -2115,14 +2324,34 @@ class Crossfitting(Explainer):
         self.ueifs_Z = ueifs_Z_accum[seen]
         n_eff = int(seen.sum())
 
+        # Null-threshold for _last_results: zero out features whose mean UEIF is
+        # negative (matches the DFI paper: features with E[UEIF] < 0 have no
+        # evidence of importance). Applied to a *copy* so that self.ueifs_X /
+        # self.ueifs_Z remain unthresholded — conf_int(groups=...) can then apply
+        # its own threshold_null flag on the raw per-sample arrays.
+        ueifs_X_thresh = self.ueifs_X.copy()
+        ueifs_Z_thresh = self.ueifs_Z.copy()
+        for arr in (ueifs_X_thresh, ueifs_Z_thresh):
+            null_mask = arr.mean(axis=0) < 0
+            arr[:, null_mask] = 0.0
+
+        # SE with n_folds correction to match the DFI paper:
+        #   sqn_eff = sqrt(n) * sqrt((n_folds-1)/n_folds)
+        # For n_folds=2 this gives sqn_eff = sqrt(n/2), which is sqrt(2)× larger
+        # than the naive sqrt(n), resulting in more conservative inference.
+        n_folds = getattr(self.cv_, "n_splits", 1)
+        sqn_eff = np.sqrt(n_eff)
+        if n_folds > 1:
+            sqn_eff *= np.sqrt((n_folds - 1) / n_folds)
+
         ddof = 1 if n_eff > 1 else 0
         results = {
-            "phi_X": self.ueifs_X.mean(axis=0),
-            "std_X": self.ueifs_X.std(axis=0),
-            "se_X": self.ueifs_X.std(axis=0, ddof=ddof) / np.sqrt(n_eff),
-            "phi_Z": self.ueifs_Z.mean(axis=0),
-            "std_Z": self.ueifs_Z.std(axis=0),
-            "se_Z": self.ueifs_Z.std(axis=0, ddof=ddof) / np.sqrt(n_eff),
+            "phi_X": ueifs_X_thresh.mean(axis=0),
+            "std_X": ueifs_X_thresh.std(axis=0),
+            "se_X": ueifs_X_thresh.std(axis=0, ddof=ddof) / sqn_eff,
+            "phi_Z": ueifs_Z_thresh.mean(axis=0),
+            "std_Z": ueifs_Z_thresh.std(axis=0),
+            "se_Z": ueifs_Z_thresh.std(axis=0, ddof=ddof) / sqn_eff,
         }
         self._cache_results(results, n_eff)
         return results
