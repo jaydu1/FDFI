@@ -24,10 +24,7 @@ python:
     # Install the package itself
     - method: pip
       path: .
-      extra_requirements:
-        - plots
 
 # Formats to build
 formats:
-  - pdf
   - epub
