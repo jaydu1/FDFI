@@ -30,15 +30,19 @@ explainer = Explainer(my_model)
 import numpy as np
 
 X_test = np.random.randn(10, 5)  # Test data
-# shap_values = explainer(X_test)  # Coming soon!
+results = explainer(X_test)
 ```
 
 ### 3. Visualize Results
 
 ```python
-from fdfi.plots import summary_plot
+from fdfi.plots import summary_bar, summary_plot
 
-# summary_plot(shap_values, X_test)  # Coming soon!
+feature_names = [f"X{i}" for i in range(X_test.shape[1])]
+summary_bar(results["phi_X"], results["se_X"], feature_names, show=False)
+
+# Per-sample UEIFs are available after running an OT/EOT/Flow explainer.
+summary_plot(explainer.ueifs_X, features=X_test, feature_names=feature_names, show=False)
 ```
 
 ## Explainer Types

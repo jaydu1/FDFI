@@ -7,7 +7,7 @@
 
 A Python library for computing feature importance using disentangled methods, inspired by SHAP.
 
-Current release: `0.0.5`
+Current release: `0.0.7`
 
 ## Overview
 
@@ -39,7 +39,6 @@ Use `pyproject.toml` extras:
 
 ```bash
 pip install -e ".[dev]"
-pip install -e ".[plots]"
 pip install -e ".[flow]"
 ```
 
@@ -69,6 +68,36 @@ ci = explainer.conf_int(alpha=0.05, target="X", alternative="two-sided")
 # With multiple testing correction (e.g., FDR control)
 ci_fdr = explainer.conf_int(multitest_method="fdr_bh")
 explainer.summary(multitest_method="fdr_bh")
+```
+
+### Visualization
+
+FDFI includes static Matplotlib plotting helpers for global scores,
+per-sample UEIFs, confidence intervals, diagnostics, and feature correlation.
+
+```python
+from fdfi.plots import (
+    confidence_interval_plot,
+    correlation_heatmap,
+    diagnostics_plot,
+    summary_bar,
+    summary_plot,
+)
+
+feature_names = [f"X{i}" for i in range(X_background.shape[1])]
+
+# Background correlation structure
+correlation_heatmap(X_background, feature_names, show=False)
+
+# Global scores and standard errors from explainer output
+summary_bar(results["phi_X"], results["se_X"], feature_names, show=False)
+
+# Per-sample UEIF distribution after running the explainer
+summary_plot(explainer.ueifs_X, features=X_test, feature_names=feature_names, show=False)
+
+# Inference and quality checks
+confidence_interval_plot(ci, feature_names=feature_names, show=False)
+diagnostics_plot(explainer.diagnostics, feature_names=feature_names, show=False)
 ```
 
 ### CI Defaults in v0.0.2
@@ -187,15 +216,10 @@ FDFI/
 
 ## Development Status
 
-🚧 **This is starter code for DFI development.** The core structure and API are in place, but full implementations are coming soon.
-
-Current status:
-- ✅ Package structure established
-- ✅ Base classes and interfaces defined
-- ✅ Testing framework set up
-- ✅ Documentation structure created
-- 🚧 Core algorithms (in development)
-- 🚧 Visualization functions (in development)
+FDFI is under active research development. The package includes implemented
+OT/EOT/Flow explainers, statistical inference helpers, diagnostics, plotting
+utilities, tests, and documentation. Some advanced modeling components continue
+to evolve as the methodology develops.
 
 ## Testing
 
@@ -220,6 +244,7 @@ Full documentation and tutorials are available in the `docs/` directory:
 - [EOT Explainer Tutorial](docs/tutorials/eot_explainer.ipynb)
 - [Flow Explainer Tutorial](docs/tutorials/flow_explainer.ipynb)
 - [Confidence Intervals](docs/tutorials/confidence_intervals.ipynb)
+- [Visualization Tutorial](docs/tutorials/visualization.ipynb)
 
 ## Contributing
 

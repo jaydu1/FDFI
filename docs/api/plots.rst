@@ -4,98 +4,92 @@ Plotting Functions
 Overview
 --------
 
-The ``fdfi.plots`` module provides visualization functions for feature 
-importance, similar to SHAP's plotting capabilities. These functions help 
-you understand and communicate model explanations.
+The ``fdfi.plots`` module provides static Matplotlib visualizations for FDFI
+diagnostics and results. All functions return Matplotlib objects and accept
+``show=False`` for tests, scripts, and documentation builds.
 
-.. note::
+Typical inputs come directly from explainer results:
 
-   Plotting functions require the ``plots`` extra dependency:
-   
-   .. code-block:: bash
+.. code-block:: python
 
-      pip install -e ".[plots]"
+   results = explainer(X_test)
+   ci = explainer.conf_int(alpha=0.05, target="X")
+   feature_names = [f"X{i}" for i in range(X_test.shape[1])]
+
+   summary_bar(results["phi_X"], results["se_X"], feature_names, show=False)
+   summary_plot(explainer.ueifs_X, features=X_test, feature_names=feature_names, show=False)
+   confidence_interval_plot(ci, feature_names=feature_names, show=False)
+   diagnostics_plot(explainer.diagnostics, feature_names=feature_names, show=False)
+
+Global Importance
+-----------------
+
+.. autofunction:: fdfi.plots.summary_bar
+
+``summary_bar`` is the public global bar-chart API for aggregate arrays such as
+``results["phi_X"]`` and ``results["phi_Z"]``. It sorts features by absolute
+importance, sanitizes missing or infinite standard errors, supports optional
+feature-color mappings, and returns the sorted table used for plotting.
 
 Summary Plot
 ------------
 
 .. autofunction:: fdfi.plots.summary_plot
 
-The summary plot shows the distribution of feature importance values across 
-all samples, with features ordered by their overall importance.
+``summary_plot`` draws a SHAP-like dot summary for 2D per-sample attribution
+arrays such as ``explainer.ueifs_X`` or ``explainer.ueifs_Z``. For 1D aggregate
+arrays, it delegates to ``summary_bar``.
 
-**Example:**
-
-.. code-block:: python
-
-   from fdfi.plots import summary_plot
-
-   # After computing explanations
-   results = explainer(X_test)
-   
-   # Create summary visualization
-   summary_plot(results["phi_X"], features=X_test, feature_names=feature_names)
-
-Waterfall Plot
---------------
+Single-Explanation Views
+------------------------
 
 .. autofunction:: fdfi.plots.waterfall_plot
 
-The waterfall plot shows how each feature contributes to pushing the 
-prediction from the base value for a single sample.
-
-**Example:**
-
-.. code-block:: python
-
-   from fdfi.plots import waterfall_plot
-
-   # Explain a single prediction
-   waterfall_plot(
-       results["phi_X"][0],  # First sample
-       feature_names=feature_names,
-       max_display=10
-   )
-
-Force Plot
-----------
-
 .. autofunction:: fdfi.plots.force_plot
 
-The force plot is an interactive visualization showing feature contributions 
-as forces pushing the prediction higher or lower.
-
-**Example:**
+Use these for one row of per-sample UEIFs:
 
 .. code-block:: python
 
-   from fdfi.plots import force_plot
-
-   force_plot(
-       base_value=0.5,
-       shap_values=results["phi_X"][0],
-       feature_names=feature_names
-   )
+   waterfall_plot(explainer.ueifs_X[0], feature_names=feature_names, show=False)
+   force_plot(0.0, explainer.ueifs_X[0], feature_names=feature_names, show=False)
 
 Dependence Plot
 ---------------
 
 .. autofunction:: fdfi.plots.dependence_plot
 
-The dependence plot shows the relationship between a feature's value and 
-its contribution to the model output, optionally colored by another feature 
-to show interaction effects.
-
-**Example:**
+``dependence_plot`` accepts integer or string feature identifiers and can color
+points by an interaction feature:
 
 .. code-block:: python
 
-   from fdfi.plots import dependence_plot
-
-   # Show dependence for feature 0
    dependence_plot(
-       feature_idx=0,
-       shap_values=results["phi_X"],
-       features=X_test,
-       feature_names=feature_names
+       "X0",
+       explainer.ueifs_X,
+       X_test,
+       feature_names=feature_names,
+       interaction_index="X1",
+       show=False,
    )
+
+Feature Correlation
+-------------------
+
+.. autofunction:: fdfi.plots.correlation_heatmap
+
+The heatmap uses Pearson correlation and hierarchical clustering based on
+``1 - abs(correlation)`` to reveal correlated feature blocks in the background
+data.
+
+Inference and Diagnostics
+-------------------------
+
+.. autofunction:: fdfi.plots.confidence_interval_plot
+
+.. autofunction:: fdfi.plots.diagnostics_plot
+
+``confidence_interval_plot`` accepts dictionaries returned by ``conf_int()``,
+including feature-level and grouped outputs. ``diagnostics_plot`` accepts the
+shared diagnostics dictionaries exposed by ``OTExplainer``, ``EOTExplainer``,
+and ``FlowExplainer``.

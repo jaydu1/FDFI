@@ -19,6 +19,7 @@ Key Features
 - 🎯 **Multiple Explainer Types**: Tree, Linear, Kernel, and Optimal Transport explainers
 - 🧭 **OT-Based DFI**: Gaussian OT (OTExplainer) and Entropic OT (EOTExplainer)
 - 🔍 **Shared Diagnostics**: Latent independence and fidelity checks for OT/EOT/Flow
+- 📊 **Visualization**: Summary, waterfall, force, dependence, CI, and diagnostics plots
 - 📊 **Statistical Inference**: Confidence intervals and hypothesis testing
 - 🔧 **Easy to Use**: Simple API similar to SHAP
 - 🚀 **Extensible**: Built with modularity for future enhancements
@@ -30,6 +31,7 @@ Quick Example
 
    import numpy as np
    from fdfi.explainers import OTExplainer
+   from fdfi.plots import summary_bar
 
    # Define your model
    def model(X):
@@ -48,6 +50,10 @@ Quick Example
    # Get confidence intervals
    ci = explainer.conf_int(alpha=0.05, target="X", alternative="two-sided")
 
+   # Visualize global scores
+   feature_names = [f"X{i}" for i in range(X_background.shape[1])]
+   summary_bar(results["phi_X"], results["se_X"], feature_names, show=False)
+
 Installation
 ------------
 
@@ -58,7 +64,6 @@ Installation
    pip install -e .
 
    # With optional dependencies
-   pip install -e ".[plots]"   # For visualization
    pip install -e ".[flow]"    # For flow matching models
    pip install -e ".[dev]"     # For development
 
