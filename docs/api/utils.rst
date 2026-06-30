@@ -4,71 +4,12 @@ Utilities
 Overview
 --------
 
-The ``fdfi.utils`` module provides helper functions and classes used across 
-the FDFI package.
-
-Input Validation
-----------------
-
-.. autofunction:: fdfi.utils.validate_input
-
-Data Sampling
--------------
-
-.. autofunction:: fdfi.utils.sample_background
-
-Feature Names
--------------
-
-.. autofunction:: fdfi.utils.get_feature_names
-
-Link Functions
---------------
-
-.. autofunction:: fdfi.utils.convert_to_link
-
-The following link functions are supported:
-
-- ``"identity"``: No transformation (default)
-- ``"logit"``: Logit transformation for probability outputs
-
-Additivity Check
-----------------
-
-.. autofunction:: fdfi.utils.check_additivity
-
-This function verifies the SHAP additivity property:
-
-.. math::
-
-   f(x) = \\phi_0 + \\sum_{j=1}^{d} \\phi_j
-
-where :math:`\\phi_0` is the base value and :math:`\\phi_j` are the feature 
-attributions.
-
-Feature Type Detection
-----------------------
-
-.. autofunction:: fdfi.utils.detect_feature_types
-
-This function auto-detects whether features are binary, categorical, or 
-continuous based on the data distribution.
-
-Gower Distance
---------------
-
-.. autofunction:: fdfi.utils.gower_cost_matrix
-
-Computes the Gower distance matrix for mixed-type data (continuous, binary, 
-and categorical features). Used by ``EOTExplainer`` when ``cost_metric="gower"``
-or ``cost_metric="auto"``.
-
-Diagnostics Utilities
----------------------
-
-.. autofunction:: fdfi.utils.compute_latent_independence
-
-.. autofunction:: fdfi.utils.compute_mmd
+The ``fdfi.utils`` module provides helper functions and classes used across
+the FDFI package.  The most commonly useful symbols for end users are
+:class:`~fdfi.utils.TwoComponentMixture` (for understanding variance-floor and
+margin estimation), :func:`~fdfi.utils.compute_latent_independence`, and
+:func:`~fdfi.utils.compute_mmd`.  The remaining helpers are used internally by
+the explainer classes.
 
 Statistical Utilities
 ---------------------
@@ -78,31 +19,48 @@ TwoComponentMixture
 
 .. autoclass:: fdfi.utils.TwoComponentMixture
    :members:
-   :special-members: __init__
-   :show-inheritance:
 
-The ``TwoComponentMixture`` class fits a two-component Gaussian mixture model 
-and is used for:
+Latent Independence (dCor)
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-1. **Variance floor estimation**: Determining a minimum variance threshold 
-   for stable confidence intervals
-2. **Practical significance margins**: Estimating reasonable effect size 
-   thresholds
+.. autofunction:: fdfi.utils.compute_latent_independence
 
-**Example:**
+Maximum Mean Discrepancy
+~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. code-block:: python
+.. autofunction:: fdfi.utils.compute_mmd
 
-   from fdfi.utils import TwoComponentMixture
-   import numpy as np
+Feature Type Detection
+----------------------
 
-   # Fit mixture to standard errors
-   se_values = np.array([0.01, 0.02, 0.15, 0.18, 0.20, 0.25])
-   mixture = TwoComponentMixture().fit(se_values)
+.. autofunction:: fdfi.utils.detect_feature_types
 
-   # Get quantile from smaller component
-   floor = mixture.quantile(0.95, component="smaller")
-   print(f"Variance floor: {floor}")
+Gower Distance
+--------------
 
-   # Visualize the fit
-   mixture.plot(se_values)
+.. autofunction:: fdfi.utils.gower_cost_matrix
+
+Computes the Gower distance matrix for mixed-type data (continuous, binary,
+and categorical features). Used by ``EOTExplainer`` when ``cost_metric="gower"``
+or ``cost_metric="auto"``.
+
+Internal Helpers
+----------------
+
+The following functions are used internally by the explainer classes.  They
+are documented here for completeness but are not part of the stable public API.
+
+.. autofunction:: fdfi.utils.validate_input
+
+.. autofunction:: fdfi.utils.sample_background
+
+.. autofunction:: fdfi.utils.get_feature_names
+
+.. autofunction:: fdfi.utils.convert_to_link
+
+The following link functions are supported:
+
+- ``"identity"``: No transformation (default)
+- ``"logit"``: Logit transformation for probability outputs
+
+.. autofunction:: fdfi.utils.check_additivity

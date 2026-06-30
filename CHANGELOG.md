@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.8] - 2026-06-30
+### Added
+- **One-sided confidence interval plots**: `confidence_interval_plot()` now detects `alternative='greater'` or `alternative='less'` in the `conf_int()` result dict and renders the open bound as a short stub with a native matplotlib limit-indicator caret (►/◄ via `xuplims`/`xlolims`), following the forest-plot truncation convention. Axis limits exclude the infinite bound; a corner annotation and one-sided hint are added to the default xlabel and title.
+- New optional kwargs for `confidence_interval_plot()`: `stub_fraction` (default 0.06), `show_alternative_note` (default True), `note_fontsize` (default 8), `marker` (default 'o').
+- Added 15 new tests in `TestCIPlotOneSided` covering smoke rendering, finite axis-limit checks, caret artist presence, backward compatibility, annotation toggle, label content, stub_fraction effect, unknown alternative validation, savepath, and max_display truncation.
+- New tutorial section "Visualising One-Sided and Two-Sided Confidence Intervals" in `docs/tutorials/confidence_intervals.ipynb` with a 3-panel side-by-side comparison.
+
 ## [0.0.7] - 2026-05-26
 ### Added
 - Working `fdfi.plots` visualizations for summary, waterfall, force, dependence, correlation heatmap, confidence interval, and diagnostics views.

@@ -982,12 +982,18 @@ def confidence_interval_plot(
     """
     Plot FDFI confidence intervals from ``conf_int()`` output.
 
+    For two-sided CIs both error bar arms are drawn with flat caps.  For
+    one-sided CIs (``alternative='greater'`` or ``'less'``) the open arm is
+    rendered as a short stub whose cap is replaced by an outward-pointing caret
+    (► or ◄), following the forest-plot truncation convention and using
+    Matplotlib's native ``xuplims`` / ``xlolims`` limit-indicator support.
+
     Parameters
     ----------
     ci_results : mapping
         Dictionary returned by ``explainer.conf_int()``. Required keys are
-        ``score``, ``ci_lower``, and ``ci_upper``. ``reject_null`` and
-        ``ranking`` are used when present.
+        ``score``, ``ci_lower``, and ``ci_upper``. ``reject_null``,
+        ``ranking``, and ``alternative`` are used when present.
     feature_names : sequence of str, optional
         Feature names. If ``ci_results`` contains ``groups``, those group names
         are used by default.
@@ -1000,7 +1006,16 @@ def confidence_interval_plot(
     savepath : str, optional
         Path where the figure should be saved.
     **kwargs
-        Styling options.
+        Styling options.  One-sided-specific keys:
+
+        ``stub_fraction`` : float, default 0.06
+            Fraction of the axis width used for the open-arm stub.
+        ``show_alternative_note`` : bool, default True
+            Show a corner annotation describing the open bound.
+        ``note_fontsize`` : int, default 8
+            Font size for the corner annotation.
+        ``marker`` : str, default ``'o'``
+            Marker style for point estimates.
 
     Returns
     -------
@@ -1011,6 +1026,9 @@ def confidence_interval_plot(
     --------
     >>> ci = explainer.conf_int(alpha=0.05, target="X")
     >>> confidence_interval_plot(ci, feature_names=feature_names, show=False)
+
+    >>> ci_one = explainer.conf_int(alpha=0.05, alternative="greater")
+    >>> confidence_interval_plot(ci_one, feature_names=feature_names, show=False)
     """
     required = ("score", "ci_lower", "ci_upper")
     missing = [key for key in required if key not in ci_results]
@@ -1018,6 +1036,14 @@ def confidence_interval_plot(
         raise ValueError(f"ci_results is missing required keys: {missing}")
     if max_display <= 0:
         raise ValueError("max_display must be positive")
+
+    # -- Alternative hypothesis ------------------------------------------
+    alternative = ci_results.get("alternative", "two-sided")
+    if alternative not in ("two-sided", "greater", "less"):
+        raise ValueError(
+            f"ci_results['alternative'] must be 'two-sided', 'greater', or 'less';"
+            f" got {alternative!r}"
+        )
 
     score = _as_1d(ci_results["score"], "ci_results['score']")
     lower = _as_1d(ci_results["ci_lower"], "ci_results['ci_lower']")
@@ -1050,13 +1076,25 @@ def confidence_interval_plot(
     plot_names = [names[i] for i in order]
     plot_reject = reject[order].astype(bool)
 
-    finite_values = np.concatenate(
-        [
-            plot_score[np.isfinite(plot_score)],
-            plot_lower[np.isfinite(plot_lower)],
-            plot_upper[np.isfinite(plot_upper)],
-        ]
-    )
+    # -- Axis limits: exclude the infinite bound for one-sided CIs -------
+    finite_scores = plot_score[np.isfinite(plot_score)]
+    if alternative == "greater":
+        finite_values = np.concatenate(
+            [finite_scores, plot_lower[np.isfinite(plot_lower)]]
+        )
+    elif alternative == "less":
+        finite_values = np.concatenate(
+            [finite_scores, plot_upper[np.isfinite(plot_upper)]]
+        )
+    else:
+        finite_values = np.concatenate(
+            [
+                finite_scores,
+                plot_lower[np.isfinite(plot_lower)],
+                plot_upper[np.isfinite(plot_upper)],
+            ]
+        )
+
     if finite_values.size == 0:
         finite_min, finite_max = -1.0, 1.0
     else:
@@ -1065,24 +1103,46 @@ def confidence_interval_plot(
         if finite_min == finite_max:
             finite_min -= 1.0
             finite_max += 1.0
+
     pad = 0.08 * (finite_max - finite_min)
     clip_min = finite_min - pad
     clip_max = finite_max + pad
-    lower_plot = np.where(np.isfinite(plot_lower), plot_lower, clip_min)
-    upper_plot = np.where(np.isfinite(plot_upper), plot_upper, clip_max)
-    xerr = np.vstack([plot_score - lower_plot, upper_plot - plot_score])
-    xerr = np.maximum(xerr, 0.0)
 
+    # Stub length for the open arm; also widen axis so the caret fits
+    stub_fraction = kwargs.get("stub_fraction", 0.06)
+    stub = stub_fraction * (clip_max - clip_min)
+    if alternative == "greater":
+        clip_max += stub
+    elif alternative == "less":
+        clip_min -= stub
+
+    # -- Build xerr (2 x n): [left_arm, right_arm] -----------------------
+    if alternative == "greater":
+        left_bound = np.where(np.isfinite(plot_lower), plot_lower, plot_score - stub)
+        left_arm = np.maximum(plot_score - left_bound, 0.0)
+        right_arm = np.full(len(order), stub)
+        xerr = np.vstack([left_arm, right_arm])
+    elif alternative == "less":
+        right_bound = np.where(np.isfinite(plot_upper), plot_upper, plot_score + stub)
+        right_arm = np.maximum(right_bound - plot_score, 0.0)
+        left_arm = np.full(len(order), stub)
+        xerr = np.vstack([left_arm, right_arm])
+    else:
+        lower_plot = np.where(np.isfinite(plot_lower), plot_lower, clip_min)
+        upper_plot = np.where(np.isfinite(plot_upper), plot_upper, clip_max)
+        xerr = np.vstack([plot_score - lower_plot, upper_plot - plot_score])
+        xerr = np.maximum(xerr, 0.0)
+
+    # -- Draw ------------------------------------------------------------
     figsize = kwargs.get("figsize", (8.0, max(3.5, 0.34 * len(order) + 1.5)))
     fig, ax = _fig_ax(ax, figsize)
     y_pos = np.arange(len(order))
     colors = np.where(plot_reject, kwargs.get("significant_color", "#d62728"), "#777777")
+    marker = kwargs.get("marker", "o")
+
     for y, value, err, color in zip(y_pos, plot_score, xerr.T, colors):
-        ax.errorbar(
-            value,
-            y,
-            xerr=err.reshape(2, 1),
-            fmt="o",
+        eb_kwargs: Dict[str, Any] = dict(
+            fmt=marker,
             color=kwargs.get("interval_color", "#333333"),
             ecolor=color,
             markerfacecolor="white",
@@ -1092,6 +1152,12 @@ def confidence_interval_plot(
             linewidth=kwargs.get("linewidth", 1.2),
             zorder=3,
         )
+        if alternative == "greater":
+            eb_kwargs["xuplims"] = True
+        elif alternative == "less":
+            eb_kwargs["xlolims"] = True
+        ax.errorbar(value, y, xerr=err.reshape(2, 1), **eb_kwargs)
+
     margin = ci_results.get("margin", 0.0)
     if np.ndim(margin) == 0:
         ax.axvline(float(margin), color="#555555", linestyle="--", linewidth=0.9)
@@ -1099,13 +1165,48 @@ def confidence_interval_plot(
     ax.set_yticks(y_pos)
     ax.set_yticklabels(plot_names, fontsize=kwargs.get("tick_fontsize", 9))
     ax.invert_yaxis()
-    ax.set_xlabel(kwargs.get("xlabel", "FDFI score with confidence interval"))
+
+    # Default labels reflect the alternative
+    if alternative == "greater":
+        default_xlabel = (
+            "FDFI score with confidence interval  [H\u2081: \u03c6 > margin, one-sided]"
+        )
+        default_title = "FDFI Confidence Intervals  (one-sided)"
+    elif alternative == "less":
+        default_xlabel = (
+            "FDFI score with confidence interval  [H\u2081: \u03c6 < margin, one-sided]"
+        )
+        default_title = "FDFI Confidence Intervals  (one-sided)"
+    else:
+        default_xlabel = "FDFI score with confidence interval"
+        default_title = "FDFI Confidence Intervals"
+
+    ax.set_xlabel(kwargs.get("xlabel", default_xlabel))
     ax.set_title(
-        kwargs.get("title", "FDFI Confidence Intervals"),
+        kwargs.get("title", default_title),
         fontsize=kwargs.get("title_fontsize", 11),
     )
     ax.grid(axis="x", linestyle="--", alpha=0.25)
     ax.set_xlim(clip_min, clip_max)
+
+    # Corner annotation for one-sided plots
+    if alternative != "two-sided" and kwargs.get("show_alternative_note", True):
+        note = (
+            "\u25ba upper bound is +\u221e"
+            if alternative == "greater"
+            else "\u25c4 lower bound is \u2212\u221e"
+        )
+        ax.text(
+            0.98,
+            0.02,
+            note,
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=kwargs.get("note_fontsize", 8),
+            color="#555555",
+            style="italic",
+        )
 
     _finish_figure(
         fig,

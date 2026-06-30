@@ -365,3 +365,207 @@ class TestTutorialSmoke:
         assert expected <= imported
         for name in imported:
             assert hasattr(plots, name)
+
+
+# ---------------------------------------------------------------------------
+# Helpers reused across TestCIPlotOneSided
+# ---------------------------------------------------------------------------
+
+def _ci_greater():
+    """ci_results dict for alternative='greater' (ci_upper = +inf)."""
+    return {
+        "score":       np.array([0.4, 0.2, 0.05]),
+        "ci_lower":    np.array([0.28, 0.10, -0.02]),
+        "ci_upper":    np.full(3, np.inf),
+        "reject_null": np.array([True, True, False]),
+        "alternative": "greater",
+        "margin":      0.0,
+    }
+
+
+def _ci_less():
+    """ci_results dict for alternative='less' (ci_lower = -inf)."""
+    return {
+        "score":       np.array([0.4, 0.2, 0.05]),
+        "ci_lower":    np.full(3, -np.inf),
+        "ci_upper":    np.array([0.52, 0.30, 0.17]),
+        "reject_null": np.array([True, True, False]),
+        "alternative": "less",
+        "margin":      0.0,
+    }
+
+
+class TestCIPlotOneSided:
+    """Tests for one-sided confidence interval rendering in confidence_interval_plot."""
+
+    # -- Smoke tests --------------------------------------------------------
+
+    def test_ci_greater_returns_figure_and_axes(self):
+        fig, ax = confidence_interval_plot(_ci_greater(), show=False)
+        assert fig is not None
+        assert ax is not None
+        close(fig)
+
+    def test_ci_less_returns_figure_and_axes(self):
+        fig, ax = confidence_interval_plot(_ci_less(), show=False)
+        assert fig is not None
+        assert ax is not None
+        close(fig)
+
+    # -- Axis limit tests ---------------------------------------------------
+
+    def test_ci_greater_right_axis_limit_is_finite_and_bounded(self):
+        fig, ax = confidence_interval_plot(_ci_greater(), show=False)
+        fig.canvas.draw()
+        xmin, xmax = ax.get_xlim()
+        assert np.isfinite(xmax), "right axis limit must be finite"
+        # xmax should not extend far beyond the largest finite score (0.4)
+        assert xmax < 2.0, f"right axis limit {xmax} is unexpectedly large"
+        close(fig)
+
+    def test_ci_less_left_axis_limit_is_finite_and_bounded(self):
+        fig, ax = confidence_interval_plot(_ci_less(), show=False)
+        fig.canvas.draw()
+        xmin, xmax = ax.get_xlim()
+        assert np.isfinite(xmin), "left axis limit must be finite"
+        assert xmin > -2.0, f"left axis limit {xmin} is unexpectedly small"
+        close(fig)
+
+    # -- Caret marker tests -------------------------------------------------
+
+    def test_ci_greater_has_limit_indicator_artists(self):
+        fig, ax = confidence_interval_plot(_ci_greater(), show=False)
+        fig.canvas.draw()
+        markers = [line.get_marker() for line in ax.lines]
+        # matplotlib uses CARETLEFTBASE (8) for xuplims=True on the upper (right) cap
+        import matplotlib.lines as mlines
+        caret_like = [m for m in markers if m == mlines.CARETLEFTBASE]
+        assert len(caret_like) > 0, (
+            f"Expected CARETLEFTBASE (8) markers for xuplims=True; got markers={markers}"
+        )
+        close(fig)
+
+    def test_ci_less_has_limit_indicator_artists(self):
+        fig, ax = confidence_interval_plot(_ci_less(), show=False)
+        fig.canvas.draw()
+        markers = [line.get_marker() for line in ax.lines]
+        # matplotlib uses CARETRIGHTBASE (9) for xlolims=True on the lower (left) cap
+        import matplotlib.lines as mlines
+        caret_like = [m for m in markers if m == mlines.CARETRIGHTBASE]
+        assert len(caret_like) > 0, (
+            f"Expected CARETRIGHTBASE (9) markers for xlolims=True; got markers={markers}"
+        )
+        close(fig)
+
+    # -- Two-sided regression test ------------------------------------------
+
+    def test_ci_two_sided_unchanged(self):
+        ci = {
+            "score":       np.array([0.3, 0.1]),
+            "ci_lower":    np.array([0.2, 0.05]),
+            "ci_upper":    np.array([0.4, 0.15]),
+            "reject_null": np.array([True, False]),
+            "alternative": "two-sided",
+            "margin":      0.0,
+        }
+        fig, ax = confidence_interval_plot(ci, show=False)
+        fig.canvas.draw()
+        xmin, xmax = ax.get_xlim()
+        assert np.isfinite(xmin) and np.isfinite(xmax)
+        # No caret markers expected for two-sided (8=CARETLEFTBASE, 9=CARETRIGHTBASE)
+        import matplotlib.lines as mlines
+        markers = [line.get_marker() for line in ax.lines]
+        assert all(m not in (mlines.CARETLEFTBASE, mlines.CARETRIGHTBASE) for m in markers)
+        close(fig)
+
+    # -- Backward-compatibility test ----------------------------------------
+
+    def test_ci_missing_alternative_defaults_to_two_sided(self):
+        ci = {
+            "score":    np.array([0.3, 0.1]),
+            "ci_lower": np.array([0.2, 0.05]),
+            "ci_upper": np.array([0.4, 0.15]),
+        }
+        fig, ax = confidence_interval_plot(ci, show=False)
+        fig.canvas.draw()
+        xmin, xmax = ax.get_xlim()
+        assert np.isfinite(xmin) and np.isfinite(xmax)
+        close(fig)
+
+    # -- Annotation tests ---------------------------------------------------
+
+    def test_ci_greater_shows_corner_annotation(self):
+        fig, ax = confidence_interval_plot(_ci_greater(), show=False)
+        texts = [t.get_text() for t in ax.texts]
+        assert any(
+            "upper bound" in t or "\u221e" in t or "inf" in t.lower() for t in texts
+        ), f"Expected corner annotation about unbounded upper; got texts={texts}"
+        close(fig)
+
+    def test_ci_greater_annotation_suppressed(self):
+        fig, ax = confidence_interval_plot(
+            _ci_greater(), show=False, show_alternative_note=False
+        )
+        texts = [t.get_text() for t in ax.texts]
+        assert not any("upper bound" in t or "\u221e" in t for t in texts), (
+            f"Expected no corner annotation; got texts={texts}"
+        )
+        close(fig)
+
+    # -- Label tests --------------------------------------------------------
+
+    def test_ci_greater_xlabel_contains_one_sided_hint(self):
+        fig, ax = confidence_interval_plot(_ci_greater(), show=False)
+        xlabel = ax.get_xlabel()
+        assert "one-sided" in xlabel.lower() or "H\u2081" in xlabel, (
+            f"xlabel does not mention one-sided: {xlabel!r}"
+        )
+        close(fig)
+
+    def test_ci_less_xlabel_contains_one_sided_hint(self):
+        fig, ax = confidence_interval_plot(_ci_less(), show=False)
+        xlabel = ax.get_xlabel()
+        assert "one-sided" in xlabel.lower() or "H\u2081" in xlabel, (
+            f"xlabel does not mention one-sided: {xlabel!r}"
+        )
+        close(fig)
+
+    # -- stub_fraction kwarg test -------------------------------------------
+
+    def test_ci_greater_stub_fraction_affects_axis_width(self):
+        ci = _ci_greater()
+        _, ax_narrow = confidence_interval_plot(ci, stub_fraction=0.02, show=False)
+        _, ax_wide   = confidence_interval_plot(ci, stub_fraction=0.20, show=False)
+        plt.close("all")
+        width_narrow = ax_narrow.get_xlim()[1] - ax_narrow.get_xlim()[0]
+        width_wide   = ax_wide.get_xlim()[1]   - ax_wide.get_xlim()[0]
+        assert width_wide > width_narrow, (
+            "Larger stub_fraction should produce a wider axis range on the open side"
+        )
+
+    # -- Validation tests ---------------------------------------------------
+
+    def test_ci_unknown_alternative_raises(self):
+        ci = {
+            "score":       np.array([0.3]),
+            "ci_lower":    np.array([0.2]),
+            "ci_upper":    np.array([0.4]),
+            "alternative": "bad-value",
+        }
+        with pytest.raises(ValueError, match="alternative"):
+            confidence_interval_plot(ci, show=False)
+
+    def test_ci_greater_savepath(self, tmp_path):
+        savepath = tmp_path / "ci_greater.png"
+        fig, _ = confidence_interval_plot(
+            _ci_greater(), savepath=str(savepath), show=False
+        )
+        assert savepath.exists()
+        close(fig)
+
+    def test_ci_greater_max_display_truncation(self):
+        fig, ax = confidence_interval_plot(
+            _ci_greater(), max_display=2, show=False
+        )
+        assert len(ax.get_yticklabels()) == 2
+        close(fig)

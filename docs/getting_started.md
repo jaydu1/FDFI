@@ -14,24 +14,39 @@ pip install -e .
 
 ### 1. Create an Explainer
 
+FDFI needs a small set of **background data** to estimate the feature
+distribution used for counterfactual comparisons.  Pass it as the `data`
+argument alongside your model.
+
 ```python
-from fdfi.explainers import Explainer
+import numpy as np
+from fdfi.explainers import OTExplainer
+
+rng = np.random.default_rng(0)
+X_background = rng.standard_normal((200, 5))  # representative background sample
 
 def my_model(X):
     # Your model's prediction function
-    return predictions
+    return X.sum(axis=1)
 
-explainer = Explainer(my_model)
+explainer = OTExplainer(my_model, data=X_background, nsamples=50)
 ```
 
 ### 2. Compute Feature Importance
 
 ```python
-import numpy as np
-
-X_test = np.random.randn(10, 5)  # Test data
+X_test = rng.standard_normal((50, 5))  # test instances to explain
 results = explainer(X_test)
 ```
+
+The returned dictionary contains:
+
+| Key | Description |
+|---|---|
+| `phi_X` | Mean UEIF in original feature space |
+| `se_X` | Standard error of `phi_X` |
+| `phi_Z` | Mean UEIF in latent (disentangled) space |
+| `se_Z` | Standard error of `phi_Z` |
 
 ### 3. Visualize Results
 
@@ -49,6 +64,8 @@ summary_plot(explainer.ueifs_X, features=X_test, feature_names=feature_names, sh
 
 ### TreeExplainer
 
+> **Not yet implemented.** Raises `NotImplementedError`. Use `OTExplainer` for now.
+
 For tree-based models (Random Forest, XGBoost, LightGBM):
 
 ```python
@@ -63,6 +80,8 @@ explainer = TreeExplainer(model)
 
 ### LinearExplainer
 
+> **Not yet implemented.** Raises `NotImplementedError`. Use `OTExplainer` for now.
+
 For linear models:
 
 ```python
@@ -76,6 +95,8 @@ explainer = LinearExplainer(model)
 ```
 
 ### KernelExplainer
+
+> **Not yet implemented.** Raises `NotImplementedError`. Use `OTExplainer` for now.
 
 Model-agnostic explainer (works with any model):
 

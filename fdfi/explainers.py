@@ -780,7 +780,54 @@ class Explainer:
         Z_full: Optional[np.ndarray] = None,
         report_title: Optional[str] = None,
     ) -> dict:
-        """Public API to compute (or recompute) diagnostics."""
+        """
+        Compute (or recompute) disentanglement diagnostics.
+
+        Evaluates latent independence via pairwise distance correlation (dCor)
+        and distribution fidelity via Maximum Mean Discrepancy (MMD).  Called
+        automatically during ``__init__`` when ``compute_diagnostics=True``.
+        Use this method to recompute diagnostics on a custom subset or after
+        calling :meth:`set_flow`.
+
+        Parameters
+        ----------
+        X_orig : np.ndarray of shape (n_samples, n_features), optional
+            Original-space data to use for MMD fidelity check.  When *None*
+            the background data stored during ``__init__`` is used.
+        Z_full : np.ndarray of shape (n_samples, n_features), optional
+            Pre-encoded latent representations.  When *None* the background
+            latent data stored during ``__init__`` is used.
+        report_title : str, optional
+            Label shown in verbose logging output.
+
+        Returns
+        -------
+        diagnostics : dict
+            Dictionary with keys:
+
+            ``latent_independence_dcor`` : np.ndarray
+                Pairwise dCor matrix of shape ``(d, d)``.
+            ``latent_independence_median`` : float
+                Median off-diagonal dCor (lower = more independent).
+            ``latent_independence_label`` : str
+                Qualitative label ``'GOOD'``, ``'MODERATE'``, or ``'POOR'``.
+            ``distribution_fidelity_mmd`` : float
+                MMD between original and reconstructed distributions.
+            ``distribution_fidelity_label`` : str
+                Qualitative label ``'GOOD'``, ``'MODERATE'``, or ``'POOR'``.
+
+        Raises
+        ------
+        ValueError
+            If diagnostics are unavailable (e.g. ``compute_diagnostics=False``
+            was set and no latent data is accessible).
+
+        Examples
+        --------
+        >>> diag = explainer.diagnose()
+        >>> print(diag["latent_independence_label"])  # 'GOOD' / 'MODERATE' / 'POOR'
+        >>> print(diag["distribution_fidelity_mmd"])
+        """
         diagnostics = self._compute_diagnostics(
             X_orig=X_orig,
             Z_full=Z_full,
@@ -850,18 +897,23 @@ class Explainer:
 class TreeExplainer(Explainer):
     """
     Explainer for tree-based models.
-    
-    This explainer is optimized for tree-based models like
-    Random Forests, Gradient Boosting, etc.
-    
+
+    .. note::
+        **Placeholder — not yet implemented.**
+        Calling this explainer raises :exc:`NotImplementedError`.
+        Use :class:`OTExplainer` or :class:`EOTExplainer` for working
+        implementations.  A native tree-structure explainer is planned for a
+        future release.
+
     Parameters
     ----------
     model : object
-        A tree-based model (e.g., sklearn RandomForest, XGBoost, LightGBM).
-    data : numpy.ndarray, optional
+        A tree-based model (e.g. sklearn ``RandomForestClassifier``,
+        XGBoost, LightGBM).
+    data : np.ndarray, optional
         Background data.
-    **kwargs : dict
-        Additional parameters.
+    **kwargs
+        Additional keyword arguments forwarded to :class:`Explainer`.
     """
     
     def __init__(
@@ -903,18 +955,20 @@ class TreeExplainer(Explainer):
 class LinearExplainer(Explainer):
     """
     Explainer for linear models.
-    
-    This explainer is optimized for linear models like
-    Linear Regression, Logistic Regression, etc.
-    
+
+    .. note::
+        **Placeholder — not yet implemented.**
+        Calling this explainer raises :exc:`NotImplementedError`.
+        Use :class:`OTExplainer` for a working model-agnostic alternative.
+
     Parameters
     ----------
     model : object
-        A linear model.
-    data : numpy.ndarray, optional
+        A linear model (e.g. sklearn ``LinearRegression``, ``LogisticRegression``).
+    data : np.ndarray, optional
         Background data.
-    **kwargs : dict
-        Additional parameters.
+    **kwargs
+        Additional keyword arguments forwarded to :class:`Explainer`.
     """
     
     def __init__(
@@ -955,18 +1009,23 @@ class LinearExplainer(Explainer):
 
 class KernelExplainer(Explainer):
     """
-    Explainer using kernel-based methods.
-    
-    This is a model-agnostic explainer that can work with any model.
-    
+    Model-agnostic explainer using kernel-based methods.
+
+    .. note::
+        **Placeholder — not yet implemented.**
+        Calling this explainer raises :exc:`NotImplementedError`.
+        Use :class:`OTExplainer` or :class:`EOTExplainer` for working
+        model-agnostic implementations.
+
     Parameters
     ----------
     model : callable
-        The model to explain.
-    data : numpy.ndarray
-        Background data (required for kernel methods).
-    **kwargs : dict
-        Additional parameters.
+        The model to explain; must accept ``np.ndarray`` and return
+        ``np.ndarray``.
+    data : np.ndarray
+        Background data (required).
+    **kwargs
+        Additional keyword arguments forwarded to :class:`Explainer`.
     """
     
     def __init__(
@@ -1010,7 +1069,92 @@ class OTExplainer(Explainer):
     """
     Optimal-transport DFI explainer using Gaussian transport.
 
-    This is the Gaussian DFI estimator without cross-fitting.
+    Computes Disentangled Feature Importance (DFI) by mapping observed
+    features to an uncorrelated (whitened) latent space via a Gaussian
+    optimal-transport linear map, computing per-sample UEIFs in that space,
+    and projecting back to the original feature space via the Jacobian.
+
+    This is the recommended starting point for most use cases with
+    continuous data. For non-Gaussian or mixed-type data, prefer
+    :class:`EOTExplainer`. For rigorous inference with a small sample,
+    consider wrapping this class with :class:`Crossfitting`.
+
+    Parameters
+    ----------
+    model : callable
+        Prediction function with signature ``f(X) -> np.ndarray`` where ``X``
+        has shape ``(n_samples, n_features)``.
+    data : np.ndarray of shape (n_background, n_features)
+        Background data used to estimate the Gaussian transport map
+        (mean and covariance). Larger backgrounds give more stable estimates;
+        100–500 samples is typically sufficient.
+    nsamples : int, default=50
+        Number of Monte Carlo resamples per feature used to estimate the
+        marginal-replacement expectation.
+    sampling_method : {'resample', 'permutation', 'normal'}, default='resample'
+        Strategy for drawing replacement values for each feature:
+
+        * ``'resample'``  – draw with replacement from the background latent
+          distribution (recommended).
+        * ``'permutation'`` – permute the test-set latent values.
+        * ``'normal'`` – draw i.i.d. standard normal samples.
+    random_state : int, default=0
+        Seed for the random number generator used in resampling.
+    verbose : bool, default=False
+        Print progress messages during setup and inference.
+    compute_diagnostics : bool, default=True
+        Compute latent-independence (dCor) and distribution-fidelity (MMD)
+        diagnostics during initialisation.
+    diagnostics_subset_max_samples : int, default=1000
+        Maximum number of background samples used for the dCor computation.
+    latent_independence_thresholds : tuple of float, default=(0.1, 0.25)
+        ``(good, poor)`` thresholds for the median off-diagonal dCor.  Values
+        below the first threshold receive label ``'GOOD'``.
+    distribution_fidelity_thresholds : tuple of float, default=(0.05, 0.15)
+        ``(good, poor)`` thresholds for the MMD.  Values below the first
+        threshold receive label ``'GOOD'``.
+    **kwargs
+        Additional keyword arguments forwarded to :class:`Explainer`.
+        Useful keys include ``regularize`` (float, default ``1e-6``) which
+        clips small eigenvalues of the covariance before computing the
+        Cholesky factor.
+
+    Attributes
+    ----------
+    mean : np.ndarray of shape (1, n_features)
+        Background mean used for centring.
+    L : np.ndarray of shape (n_features, n_features)
+        Square-root of the background covariance (Cholesky-like factor);
+        used as the decoder ``Z → X``.
+    L_inv : np.ndarray of shape (n_features, n_features)
+        Inverse of ``L``; used as the encoder ``X → Z``.
+    Z_full : np.ndarray of shape (n_background, n_features)
+        Background data projected into the latent space.
+    ueifs_X : np.ndarray of shape (n_test, n_features)
+        Per-sample UEIFs in the original X-space after calling the explainer.
+    ueifs_Z : np.ndarray of shape (n_test, n_features)
+        Per-sample UEIFs in the latent Z-space after calling the explainer.
+    diagnostics : dict
+        Disentanglement quality metrics; see :meth:`diagnose`.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from fdfi.explainers import OTExplainer
+    >>> from fdfi.plots import summary_bar
+    >>>
+    >>> rng = np.random.default_rng(0)
+    >>> X_bg  = rng.standard_normal((200, 6))
+    >>> X_test = rng.standard_normal((50, 6))
+    >>> def model(X): return X[:, 0] + 2 * X[:, 1]
+    >>>
+    >>> explainer = OTExplainer(model, data=X_bg, nsamples=50)
+    >>> results = explainer(X_test)
+    >>> print(results["phi_X"])        # global importance, X-space
+    >>> print(results["phi_Z"])        # global importance, Z-space
+    >>>
+    >>> ci = explainer.conf_int(alpha=0.05, alternative="greater")
+    >>> summary_bar(results["phi_X"], results["se_X"], show=False)
     """
     def __init__(
         self,
