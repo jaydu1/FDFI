@@ -1,233 +1,367 @@
-"""
-Tests for FDFI plotting functions.
-"""
+"""Tests for FDFI plotting functions."""
 
-import pytest
+import ast
+import json
+import re
+import warnings
+
+import matplotlib
+
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import warnings
+import pytest
+
 from fdfi.plots import (
+    confidence_interval_plot,
     correlation_heatmap,
+    dependence_plot,
+    diagnostics_plot,
+    force_plot,
     summary_bar,
-    cv_scatter
+    summary_plot,
+    waterfall_plot,
 )
 
 
-class TestCorrelationHeatmap:
-    """Test correlation_heatmap function."""
-    
-    def test_basic_functionality(self):
-        """Test basic functionality with valid inputs."""
-        np.random.seed(42)
-        X_background = np.random.randn(100, 5)
-        feature_names = ['F1', 'F2', 'F3', 'F4', 'F5']
-        
-        fig, ax, names_reord = correlation_heatmap(X_background, feature_names)
-        
+@pytest.fixture
+def plot_data():
+    """Small deterministic plotting fixture."""
+    rng = np.random.default_rng(7)
+    values = rng.normal(size=(40, 5))
+    features = rng.normal(size=(40, 5))
+    names = [f"F{i}" for i in range(5)]
+    return values, features, names
+
+
+def close(fig):
+    """Close a figure in tests."""
+    plt.close(fig)
+
+
+class TestSummaryPlot:
+    """Tests for summary_plot."""
+
+    def test_summary_plot_2d_returns_matplotlib_objects(self, plot_data):
+        values, features, names = plot_data
+
+        fig, ax = summary_plot(
+            values,
+            features=features,
+            feature_names=names,
+            max_display=4,
+            show=False,
+        )
+
         assert fig is not None
         assert ax is not None
-        assert len(names_reord) == 5
-        assert set(names_reord) == set(feature_names)
-        plt.close(fig)
-    
-    def test_sample_size_warning(self):
-        """Test that warning is issued for small sample sizes."""
-        X_background = np.random.randn(20, 5)
-        feature_names = ['F1', 'F2', 'F3', 'F4', 'F5']
-        
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            fig, ax, names_reord = correlation_heatmap(X_background, feature_names)
-            
-            assert len(w) == 1
-            assert "sample size" in str(w[0].message).lower()
-            plt.close(fig)
-    
-    def test_no_warning_for_large_sample(self):
-        """Test that no warning is issued for large sample sizes."""
-        X_background = np.random.randn(100, 5)
-        feature_names = ['F1', 'F2', 'F3', 'F4', 'F5']
-        
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            fig, ax, names_reord = correlation_heatmap(X_background, feature_names)
-            
-            assert len(w) == 0
-            plt.close(fig)
-    
-    def test_dimension_mismatch_error(self):
-        """Test that dimension mismatch raises ValueError."""
-        X_background = np.random.randn(100, 5)
-        feature_names = ['F1', 'F2', 'F3']  # Wrong length
-        
-        with pytest.raises(ValueError):
-            correlation_heatmap(X_background, feature_names)
-    
-    def test_invalid_shape_error(self):
-        """Test that 1D array raises ValueError."""
-        X_background = np.random.randn(100)
-        feature_names = ['F1']
-        
-        with pytest.raises(ValueError):
-            correlation_heatmap(X_background, feature_names)
-    
-    def test_savepath_creates_file(self, tmp_path):
-        """Test that savepath parameter saves the figure."""
-        X_background = np.random.randn(100, 5)
-        feature_names = ['F1', 'F2', 'F3', 'F4', 'F5']
-        savefile = tmp_path / "test_corr.pdf"
-        
-        fig, ax, names_reord = correlation_heatmap(
-            X_background, feature_names, savepath=str(savefile)
+        assert len(ax.get_yticklabels()) == 4
+        close(fig)
+
+    def test_summary_plot_1d_delegates_to_summary_bar(self, plot_data):
+        values, _, names = plot_data
+        phi = values.mean(axis=0)
+        se = values.std(axis=0, ddof=1) / np.sqrt(values.shape[0])
+
+        fig, ax, table = summary_plot(
+            phi,
+            se_X=se,
+            feature_names=names,
+            show=False,
         )
-        
-        assert savefile.exists()
-        plt.close(fig)
+
+        assert fig is not None
+        assert ax is not None
+        assert isinstance(table, pd.DataFrame)
+        assert list(table.columns) == ["feature", "phi", "se"]
+        assert table["phi"].is_monotonic_decreasing
+        close(fig)
 
 
 class TestSummaryBar:
-    """Test summary_bar function."""
-    
-    def test_basic_functionality(self):
-        """Test basic functionality with valid inputs."""
-        np.random.seed(42)
-        phi_X = np.array([0.05, 0.03, 0.02, 0.01, 0.005])
-        se_X = np.array([0.005, 0.003, 0.002, 0.001, 0.0005])
-        feature_names = ['F1', 'F2', 'F3', 'F4', 'F5']
-        
-        fig, ax, df = summary_bar(phi_X, se_X, feature_names)
-        
+    """Tests for summary_bar."""
+
+    def test_summary_bar_handles_none_and_finite_se(self):
+        phi = np.array([0.1, -0.5, 0.2])
+
+        fig, ax, table = summary_bar(phi, show=False)
+
         assert fig is not None
         assert ax is not None
-        assert isinstance(df, pd.DataFrame)
-        assert len(df) == 5
-        assert list(df.columns) == ['feature', 'phi', 'se']
-        assert df['phi'].iloc[0] >= df['phi'].iloc[-1]  # Sorted descending
-        plt.close(fig)
-    
-    def test_group_colors(self):
-        """Test with group_colors parameter."""
-        phi_X = np.array([0.05, 0.03, 0.02, 0.01, 0.005])
-        se_X = np.array([0.005, 0.003, 0.002, 0.001, 0.0005])
-        feature_names = ['F1', 'F2', 'F3', 'F4', 'F5']
-        group_colors = {'F1': '#4878a8', 'F2': '#c9a227', 'F3': '#3a9e8c'}
-        
-        fig, ax, df = summary_bar(phi_X, se_X, feature_names, group_colors=group_colors)
-        
-        assert fig is not None
-        assert ax is not None
-        plt.close(fig)
-    
-    def test_nan_handling(self):
-        """Test that NaN values in se_X are handled gracefully."""
-        phi_X = np.array([0.05, 0.03, 0.02, 0.01, 0.005])
-        se_X = np.array([0.005, np.nan, 0.002, np.inf, 0.0005])
-        feature_names = ['F1', 'F2', 'F3', 'F4', 'F5']
-        
-        fig, ax, df = summary_bar(phi_X, se_X, feature_names)
-        
-        assert fig is not None
-        assert ax is not None
-        assert not np.any(np.isnan(df['se']))
-        assert not np.any(np.isinf(df['se']))
-        plt.close(fig)
-    
-    def test_dynamic_coloring(self):
-        """Test dynamic coloring when group_colors is None."""
-        phi_X = np.array([0.05, 0.03, 0.02, 0.01, 0.005])
-        se_X = np.array([0.005, 0.003, 0.002, 0.001, 0.0005])
-        feature_names = ['F1', 'F2', 'F3', 'F4', 'F5']
-        
-        fig, ax, df = summary_bar(phi_X, se_X, feature_names, group_colors=None)
-        
-        assert fig is not None
-        assert ax is not None
-        plt.close(fig)
-    
-    def test_savepath_creates_file(self, tmp_path):
-        """Test that savepath parameter saves the figure."""
-        phi_X = np.array([0.05, 0.03, 0.02, 0.01, 0.005])
-        se_X = np.array([0.005, 0.003, 0.002, 0.001, 0.0005])
-        feature_names = ['F1', 'F2', 'F3', 'F4', 'F5']
-        savefile = tmp_path / "test_bar.pdf"
-        
-        fig, ax, df = summary_bar(phi_X, se_X, feature_names, savepath=str(savefile))
-        
-        assert savefile.exists()
-        plt.close(fig)
+        assert np.allclose(table["se"], 0.0)
+        assert table["feature"].iloc[0] == "Feature 1"
+        close(fig)
+
+    def test_summary_bar_sanitizes_nan_inf_and_negative_se(self):
+        phi = np.array([0.1, 0.4, 0.2, 0.3])
+        se = np.array([np.nan, np.inf, -0.5, 0.1])
+        names = ["a", "b", "c", "d"]
+
+        fig, _, table = summary_bar(phi, se, names, show=False)
+
+        assert np.all(np.isfinite(table["se"]))
+        assert np.all(table["se"] >= 0)
+        assert table.loc[table["feature"] == "a", "se"].item() == 0.0
+        close(fig)
+
+    def test_summary_bar_uses_group_colors_and_savepath(self, tmp_path):
+        phi = np.array([0.1, 0.4, 0.2])
+        se = np.array([0.01, 0.02, 0.03])
+        names = ["a", "b", "c"]
+        savepath = tmp_path / "summary_bar.png"
+
+        fig, ax, _ = summary_bar(
+            phi,
+            se,
+            names,
+            group_colors={"a": "#111111", "b": "#222222"},
+            savepath=str(savepath),
+            show=False,
+        )
+
+        assert savepath.exists()
+        assert len(ax.patches) == 3
+        close(fig)
+
+    def test_summary_bar_validates_shapes(self):
+        with pytest.raises(ValueError):
+            summary_bar([1.0, 2.0], se_X=[0.1], show=False)
 
 
-class TestCVScatter:
-    """Test cv_scatter function."""
-    
-    def test_basic_functionality(self):
-        """Test basic functionality with valid inputs."""
-        np.random.seed(42)
-        phi_X = np.array([0.05, 0.03, 0.02, 0.01, 0.005])
-        se_X = np.array([0.005, 0.003, 0.002, 0.001, 0.0005])
-        feature_names = ['F1', 'F2', 'F3', 'F4', 'F5']
-        
-        fig, ax, df_filt, df_out = cv_scatter(phi_X, se_X, feature_names)
-        
+class TestCorePlots:
+    """Tests for waterfall, force, and dependence plots."""
+
+    def test_waterfall_plot_groups_remaining_features(self):
+        values = np.array([0.5, -0.2, 0.1, 0.05, 0.03])
+
+        fig, ax = waterfall_plot(
+            values,
+            feature_names=[f"F{i}" for i in range(5)],
+            max_display=3,
+            base_value=1.0,
+            show=False,
+        )
+
         assert fig is not None
         assert ax is not None
-        assert isinstance(df_filt, pd.DataFrame)
-        assert isinstance(df_out, pd.DataFrame)
-        assert 'cv' in df_filt.columns
-        assert len(df_filt) + len(df_out) == 5
-        plt.close(fig)
-    
-    def test_zero_importance_handling(self):
-        """Test that zero-importance features are handled correctly."""
-        phi_X = np.array([0.05, 0.0, 0.02, 0.01, 0.005])
-        se_X = np.array([0.005, 0.003, 0.002, 0.001, 0.0005])
-        feature_names = ['F1', 'F2', 'F3', 'F4', 'F5']
-        
-        fig, ax, df_filt, df_out = cv_scatter(phi_X, se_X, feature_names)
-        
-        # Zero-importance feature should not be silently dropped
-        assert len(df_filt) + len(df_out) == 5
-        plt.close(fig)
-    
-    def test_high_cv_filtering(self):
-        """Test that high-CV features are filtered correctly."""
-        phi_X = np.array([0.05, 0.001, 0.02, 0.01, 0.005])
-        se_X = np.array([0.005, 0.1, 0.002, 0.001, 0.0005])  # F2 has high CV
-        feature_names = ['F1', 'F2', 'F3', 'F4', 'F5']
-        
-        fig, ax, df_filt, df_out = cv_scatter(phi_X, se_X, feature_names, y_cutoff=3.0)
-        
-        # F2 should be excluded (high CV)
-        assert 'F2' not in df_filt['feature'].values
-        assert 'F2' in df_out['feature'].values
-        plt.close(fig)
-    
-    def test_group_colors(self):
-        """Test with group_colors parameter."""
-        phi_X = np.array([0.05, 0.03, 0.02, 0.01, 0.005])
-        se_X = np.array([0.005, 0.003, 0.002, 0.001, 0.0005])
-        feature_names = ['F1', 'F2', 'F3', 'F4', 'F5']
-        group_colors = {'F1': '#4878a8', 'F2': '#c9a227'}
-        
-        fig, ax, df_filt, df_out = cv_scatter(
-            phi_X, se_X, feature_names, group_colors=group_colors
+        assert len(ax.patches) == 3
+        assert "remaining" in ax.get_yticklabels()[-1].get_text()
+        close(fig)
+
+    def test_force_plot_accepts_2d_values(self, plot_data):
+        values, _, names = plot_data
+
+        fig, ax = force_plot(
+            0.25,
+            values,
+            feature_names=names,
+            max_display=4,
+            show=False,
         )
-        
+
         assert fig is not None
         assert ax is not None
-        plt.close(fig)
-    
-    def test_savepath_creates_file(self, tmp_path):
-        """Test that savepath parameter saves the figure."""
-        phi_X = np.array([0.05, 0.03, 0.02, 0.01, 0.005])
-        se_X = np.array([0.005, 0.003, 0.002, 0.001, 0.0005])
-        feature_names = ['F1', 'F2', 'F3', 'F4', 'F5']
-        savefile = tmp_path / "test_cv.pdf"
-        
-        fig, ax, df_filt, df_out = cv_scatter(
-            phi_X, se_X, feature_names, savepath=str(savefile)
+        assert len(ax.patches) == 4
+        close(fig)
+
+    def test_dependence_plot_resolves_int_and_string_features(self, plot_data):
+        values, features, names = plot_data
+
+        fig_int, ax_int = dependence_plot(
+            0,
+            values,
+            features,
+            feature_names=names,
+            show=False,
         )
-        
-        assert savefile.exists()
-        plt.close(fig)
+        fig_str, ax_str = dependence_plot(
+            "F1",
+            values,
+            features,
+            feature_names=names,
+            interaction_index="F2",
+            show=False,
+        )
+
+        assert ax_int.get_xlabel() == "F0"
+        assert ax_str.get_xlabel() == "F1"
+        close(fig_int)
+        close(fig_str)
+
+    def test_dependence_plot_validates_string_feature_names(self, plot_data):
+        values, features, names = plot_data
+
+        with pytest.raises(ValueError):
+            dependence_plot("missing", values, features, feature_names=names, show=False)
+
+
+class TestCorrelationHeatmap:
+    """Tests for correlation_heatmap."""
+
+    def test_correlation_heatmap_returns_clustered_names(self):
+        rng = np.random.default_rng(3)
+        x0 = rng.normal(size=80)
+        X = np.column_stack([x0, x0 + rng.normal(scale=0.01, size=80), rng.normal(size=80)])
+        names = ["x0", "x1", "x2"]
+
+        fig, ax, reordered = correlation_heatmap(X, names, show=False)
+
+        assert fig is not None
+        assert ax is not None
+        assert set(reordered) == set(names)
+        close(fig)
+
+    def test_correlation_heatmap_warns_for_small_sample_size(self):
+        X = np.random.default_rng(4).normal(size=(12, 3))
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            fig, _, _ = correlation_heatmap(X, ["a", "b", "c"], show=False)
+
+        assert any("correlation estimates" in str(item.message) for item in caught)
+        close(fig)
+
+    def test_correlation_heatmap_validates_shape_and_names(self):
+        with pytest.raises(ValueError):
+            correlation_heatmap(np.arange(5), ["a"], show=False)
+
+        with pytest.raises(ValueError):
+            correlation_heatmap(np.ones((5, 2)), ["a"], show=False)
+
+
+class TestInferenceAndDiagnosticsPlots:
+    """Tests for confidence interval and diagnostics plots."""
+
+    def test_confidence_interval_plot_accepts_conf_int_style_dict(self):
+        ci = {
+            "score": np.array([0.3, 0.1, 0.2]),
+            "se": np.array([0.02, 0.01, 0.03]),
+            "ci_lower": np.array([0.25, 0.08, 0.12]),
+            "ci_upper": np.array([0.35, 0.12, 0.28]),
+            "reject_null": np.array([True, False, True]),
+            "ranking": np.array([1, 3, 2]),
+            "margin": 0.0,
+        }
+
+        fig, ax = confidence_interval_plot(
+            ci,
+            feature_names=["a", "b", "c"],
+            max_display=2,
+            show=False,
+        )
+
+        assert fig is not None
+        assert ax is not None
+        assert len(ax.get_yticklabels()) == 2
+        fig.canvas.draw()
+        close(fig)
+
+    def test_confidence_interval_plot_uses_group_names(self):
+        ci = {
+            "score": np.array([0.3, 0.1]),
+            "ci_lower": np.array([0.2, -np.inf]),
+            "ci_upper": np.array([np.inf, 0.2]),
+            "reject_null": np.array([True, False]),
+            "groups": ["clinical", "genomic"],
+        }
+
+        fig, ax = confidence_interval_plot(ci, show=False)
+
+        assert [tick.get_text() for tick in ax.get_yticklabels()] == [
+            "clinical",
+            "genomic",
+        ]
+        close(fig)
+
+    def test_confidence_interval_plot_validates_max_display(self):
+        ci = {
+            "score": np.array([0.3]),
+            "ci_lower": np.array([0.2]),
+            "ci_upper": np.array([0.4]),
+        }
+
+        with pytest.raises(ValueError):
+            confidence_interval_plot(ci, max_display=0, show=False)
+
+    def test_diagnostics_plot_accepts_existing_diagnostic_keys(self):
+        diagnostics = {
+            "latent_independence_dcor": np.eye(3),
+            "latent_independence_median": 0.04,
+            "distribution_fidelity_mmd": 0.08,
+            "latent_independence_label": "GOOD",
+            "distribution_fidelity_label": "MODERATE",
+        }
+
+        fig, axes = diagnostics_plot(
+            diagnostics,
+            feature_names=["z0", "z1", "z2"],
+            show=False,
+        )
+
+        assert fig is not None
+        assert len(axes) == 2
+        close(fig)
+
+    def test_diagnostics_plot_validates_dcor_matrix_shape(self):
+        diagnostics = {
+            "latent_independence_dcor": np.ones((2, 3)),
+            "latent_independence_median": 0.04,
+        }
+
+        with pytest.raises(ValueError):
+            diagnostics_plot(diagnostics, show=False)
+
+
+class TestTutorialSmoke:
+    """Smoke checks for visualization tutorial integration."""
+
+    def test_visualization_tutorial_is_valid_json(self):
+        with open("docs/tutorials/visualization.ipynb", encoding="utf-8") as handle:
+            notebook = json.load(handle)
+
+        assert notebook["nbformat"] == 4
+        assert any(
+            "correlation_heatmap" in "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+        )
+
+    def test_visualization_tutorial_imports_existing_plot_functions(self):
+        with open("docs/tutorials/visualization.ipynb", encoding="utf-8") as handle:
+            notebook = json.load(handle)
+
+        imported = set()
+        for cell in notebook["cells"]:
+            if cell.get("cell_type") != "code":
+                continue
+            source = "".join(cell.get("source", []))
+            for match in re.finditer(r"from fdfi\.plots import \((.*?)\)", source, re.S):
+                imported.update(
+                    name.strip() for name in match.group(1).split(",") if name.strip()
+                )
+            for line in source.splitlines():
+                if line.startswith("from fdfi.plots import ") and "(" not in line:
+                    imported.update(
+                        name.strip()
+                        for name in line.replace("from fdfi.plots import ", "").split(",")
+                        if name.strip()
+                    )
+
+        module = ast.parse("from fdfi import plots")
+        assert module is not None
+        import fdfi.plots as plots
+
+        expected = {
+            "confidence_interval_plot",
+            "correlation_heatmap",
+            "dependence_plot",
+            "diagnostics_plot",
+            "force_plot",
+            "summary_bar",
+            "summary_plot",
+            "waterfall_plot",
+        }
+        assert expected <= imported
+        for name in imported:
+            assert hasattr(plots, name)

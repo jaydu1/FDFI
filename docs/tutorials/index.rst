@@ -12,6 +12,7 @@ is a Jupyter notebook that you can run interactively.
    eot_explainer
    flow_explainer
    confidence_intervals
+   visualization
 
 Getting Started
 ---------------
@@ -43,6 +44,10 @@ Tutorial Overview
    Statistical inference with FDFI. Learn to compute confidence intervals, 
    perform hypothesis testing, and identify significant features.
 
+:doc:`visualization`
+   Plot FDFI background correlations, global scores, per-sample UEIFs,
+   dependence views, confidence intervals, and diagnostics.
+
 Running the Tutorials
 ---------------------
 
@@ -73,8 +78,8 @@ Upload the notebooks to Google Colab and run in the cloud.
 Prerequisites
 -------------
 
-Make sure you have FDFI installed with plotting support:
+Make sure you have FDFI installed:
 
 .. code-block:: bash
 
-   pip install -e ".[plots]"
+   pip install -e .

@@ -1,7 +1,7 @@
 Installation
 ============
 
-DFI can be installed from source. We recommend using a conda environment 
+FDFI can be installed from source. We recommend using a conda environment
 for managing dependencies.
 
 Using Conda (Recommended)
@@ -14,7 +14,7 @@ Create and activate a conda environment:
    conda create -n fdfi python=3.10
    conda activate fdfi
 
-Then install DFI:
+Then install FDFI:
 
 .. code-block:: bash
 
@@ -34,13 +34,8 @@ From Source with pip
 Optional Dependencies
 ---------------------
 
-DFI has optional dependency groups for different use cases:
-
-**Plotting support** (matplotlib, seaborn):
-
-.. code-block:: bash
-
-   pip install -e ".[plots]"
+FDFI includes plotting dependencies in the base install. Optional dependency
+groups are available for heavier workflows:
 
 **Flow matching models** (PyTorch, torchdiffeq):
 

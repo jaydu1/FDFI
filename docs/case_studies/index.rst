@@ -8,3 +8,4 @@ Real-world applications of FDFI explainers on drug sensitivity data
    :maxdepth: 1
 
    eot_case_study_sens50
+   flow_case_study_sens50

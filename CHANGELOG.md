@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.0.7] - 2026-05-26
+### Added
+- Working `fdfi.plots` visualizations for summary, waterfall, force, dependence, correlation heatmap, confidence interval, and diagnostics views.
+- `summary_bar()` for sorted global FDFI bars with sanitized standard errors, optional group colors, and a returned sorted table.
+- `correlation_heatmap()` with Pearson correlations, absolute-correlation hierarchical clustering, reordered feature names, and small-background warnings.
+- Visualization tutorial and documentation examples covering `results["phi_X"]`, `results["se_X"]`, per-sample `ueifs_X`, `conf_int()` output, and explainer diagnostics.
+
+### Changed
+- Replaced placeholder plot tests with non-interactive Matplotlib `Agg` tests.
+- Updated visualization documentation to remove stale "coming soon" language.
+
 ## [0.0.6] - 2026-05-17
 ### Added
 - **`zscore` and `ranking` output fields**: `conf_int()` now always returns `zscore` (signed z-statistic `(score − margin) / se`) and `ranking` (integer rank by descending z-score, 1 = most important) for all targets and group modes.
