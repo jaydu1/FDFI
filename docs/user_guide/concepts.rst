@@ -118,9 +118,20 @@ varies with position and is computed via automatic differentiation.
 **When to Use FlowExplainer**
 
 - Complex non-linear dependencies between features
-- Non-Gaussian data distributions  
+- Non-Gaussian data distributions
 - When OT assumptions are too restrictive
 - When you have sufficient data (>500 samples) to train the flow
+- When feature correlations are complex and non-linear
+
+**Trade-offs vs. OTExplainer / EOTExplainer**
+
+- Requires PyTorch; flow training adds up-front computation (``num_steps=200``
+  recommended as a starting point).
+- The Jacobian used for X-space attribution varies across samples and is
+  computed via automatic differentiation — more expensive than the fixed
+  Cholesky map in ``OTExplainer``.
+- Pre-trained flow models can be reused across experiments via
+  ``explainer.set_flow(flow)``.
 
 Shared Disentanglement Diagnostics
 ----------------------------------

@@ -186,11 +186,49 @@ def check_additivity(
 @dataclass
 class TwoComponentMixture:
     """
-    Fit a two-component Gaussian mixture and extract quantiles.
+    Two-component Gaussian mixture model for quantile estimation.
 
-    Used for:
-    1. Variance floor estimation (from raw stds)
-    2. Practical significance margin (from point estimates)
+    Fits a two-Gaussian mixture to a 1-D array of non-negative values and
+    exposes component-specific quantile queries.  Used internally by
+    :meth:`~fdfi.explainers.Explainer.conf_int` for both variance-floor
+    estimation (from raw standard errors) and practical-significance margin
+    estimation (from point estimates).
+
+    When the number of samples is below ``min_samples``, a robust fallback
+    (median + MAD) is used instead of the full EM algorithm.
+
+    Parameters
+    ----------
+    n_components : int, default=2
+        Number of Gaussian components.  Fixed at 2 in the current design.
+    random_state : int, default=0
+        Random seed forwarded to :class:`sklearn.mixture.GaussianMixture`.
+    min_samples : int, default=10
+        Minimum number of samples required to attempt GMM fitting; below
+        this threshold the robust fallback is used.
+
+    Attributes
+    ----------
+    means\_ : np.ndarray of shape (2,)
+        Component means after fitting.
+    stds\_ : np.ndarray of shape (2,)
+        Component standard deviations after fitting.
+    weights\_ : np.ndarray of shape (2,)
+        Component mixing weights after fitting.
+    gmm\_ : GaussianMixture or None
+        Fitted sklearn GMM object; ``None`` when the robust fallback was used.
+    method_used\_ : str
+        Either ``'gmm'`` or ``'robust'``, indicating which fitting path ran.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from fdfi.utils import TwoComponentMixture
+    >>> rng = np.random.default_rng(0)
+    >>> se = np.abs(rng.normal(0.1, 0.05, size=100))
+    >>> mix = TwoComponentMixture().fit(se)
+    >>> floor = mix.quantile(0.95, component="smaller")
+    >>> print(f"variance floor: {floor:.4f}")
     """
     n_components: int = 2
     random_state: int = 0
@@ -203,6 +241,20 @@ class TwoComponentMixture:
     method_used_: str = field(default=None, init=False)
 
     def fit(self, x: np.ndarray) -> "TwoComponentMixture":
+        """
+        Fit the two-component mixture to data.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            1-D array of values to fit.  Multi-dimensional arrays are
+            flattened automatically.
+
+        Returns
+        -------
+        self : TwoComponentMixture
+            The fitted instance (enables method chaining).
+        """
         x = np.asarray(x).flatten()
 
         if len(x) < self.min_samples:
@@ -263,6 +315,28 @@ class TwoComponentMixture:
         return float((np.max(x) - np.min(x)) / 4)
 
     def quantile(self, q: float, component: str = "larger") -> float:
+        """
+        Return the ``q``-th quantile of one mixture component.
+
+        Parameters
+        ----------
+        q : float
+            Quantile level in ``(0, 1)``.
+        component : {'larger', 'smaller'}, default='larger'
+            Which component to use.  ``'larger'`` selects the component with
+            the higher mean (typically the signal component); ``'smaller'``
+            selects the component with the lower mean (noise / floor).
+
+        Returns
+        -------
+        float
+            The requested quantile value.
+
+        Raises
+        ------
+        ValueError
+            If :meth:`fit` has not been called yet.
+        """
         if self.means_ is None:
             raise ValueError("Call fit() first.")
 
@@ -270,6 +344,24 @@ class TwoComponentMixture:
         return float(self.means_[idx] + stats.norm.ppf(q) * self.stds_[idx])
 
     def plot(self, x: np.ndarray, ax=None, **kwargs):
+        """
+        Plot a histogram of the data overlaid with the fitted component PDFs.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Original data values (used for the histogram).
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on.  A new figure is created when *None*.
+        **kwargs
+            Additional keyword arguments forwarded to
+            :func:`matplotlib.axes.Axes.hist`.
+
+        Returns
+        -------
+        ax : matplotlib.axes.Axes
+            The axes containing the plot.
+        """
         import matplotlib.pyplot as plt
 
         if ax is None:
@@ -299,10 +391,45 @@ def detect_feature_types(
     """
     Auto-detect feature types from data.
 
-    Returns a dict with:
-      - 'binary', 'categorical', 'continuous' indices
-      - 'types' array of labels per feature
-      - 'ranges' array of ranges per feature (for normalization)
+    Classifies each column of ``X`` as ``'binary'``, ``'categorical'``, or
+    ``'continuous'`` based on the number of unique values and whether they are
+    integer-like.
+
+    Parameters
+    ----------
+    X : np.ndarray of shape (n_samples, n_features)
+        Input feature matrix.
+    categorical_threshold : int, default=10
+        Features with at most this many unique values are considered
+        categorical (provided they are integer-like); features with exactly
+        2 unique values are always classified as binary.
+    feature_types : np.ndarray of shape (n_features,), optional
+        Pre-specified type labels (``'binary'``, ``'categorical'``,
+        ``'continuous'``) for each feature.  When provided, auto-detection is
+        skipped and this array is used directly.
+
+    Returns
+    -------
+    dict
+        Dictionary with the following keys:
+
+        ``'binary'`` : list of int
+            Column indices of binary features.
+        ``'categorical'`` : list of int
+            Column indices of categorical features.
+        ``'continuous'`` : list of int
+            Column indices of continuous features.
+        ``'types'`` : np.ndarray of shape (n_features,)
+            Per-feature type label strings.
+        ``'ranges'`` : np.ndarray of shape (n_features,)
+            Per-feature value range (used for Gower distance normalisation);
+            always ``1.0`` for binary/categorical features.
+
+    Raises
+    ------
+    ValueError
+        If ``feature_types`` is provided but its length does not match the
+        number of features.
     """
     n, d = X.shape
 
@@ -358,7 +485,32 @@ def gower_cost_matrix(
     feature_weights: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
-    Compute Gower distance matrix for mixed-type data.
+    Compute the Gower distance matrix between two sets of mixed-type samples.
+
+    Gower distance handles a mix of continuous, binary, and categorical
+    features by normalising continuous differences by the feature range and
+    using 0/1 indicator differences for discrete features.
+
+    Parameters
+    ----------
+    X : np.ndarray of shape (n, d)
+        First set of samples.
+    Z : np.ndarray of shape (m, d)
+        Second set of samples.
+    feature_types : np.ndarray of shape (d,)
+        Per-feature type labels; each element must be ``'binary'``,
+        ``'categorical'``, or ``'continuous'``.
+    feature_ranges : np.ndarray of shape (d,)
+        Per-feature value ranges for continuous-feature normalisation.
+        Typically obtained from :func:`detect_feature_types`.
+    feature_weights : np.ndarray of shape (d,), optional
+        Non-negative weights for each feature.  Normalised to sum to 1
+        internally.  Defaults to uniform weights.
+
+    Returns
+    -------
+    C : np.ndarray of shape (n, m)
+        Pairwise Gower distance matrix.  Values are in ``[0, 1]``.
     """
     n, d = X.shape
     m = Z.shape[0]

@@ -7,6 +7,29 @@ Overview
 The ``fdfi.explainers`` module provides classes for computing flow-disentangled 
 feature importance. The main classes are:
 
+Shared Methods
+--------------
+
+The following methods are available on all working explainer classes
+(``OTExplainer``, ``EOTExplainer``, ``FlowExplainer``, ``Crossfitting``):
+
+``__call__(X_test)``
+    Compute per-sample UEIFs and aggregate them to ``phi_X`` / ``phi_Z`` plus
+    standard errors.  Returns a ``dict``; also stores ``explainer.ueifs_X``
+    and ``explainer.ueifs_Z``.
+
+``conf_int(alpha=0.05, alternative='two-sided', margin=0.0, multitest_method=None, ...)``
+    Compute confidence intervals and p-values from the stored UEIFs.  See
+    :doc:`../user_guide/statistical_inference` for detailed usage.
+
+``summary(feature_names=None)``
+    Print a tabular summary of feature importances, standard errors, and
+    significance.
+
+``diagnose(X_orig=None, Z_full=None, report_title='')``
+    (Re-)compute latent independence (dCor) and distribution fidelity (MMD)
+    diagnostics.
+
 Base Explainer
 --------------
 

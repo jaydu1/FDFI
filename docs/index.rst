@@ -16,13 +16,21 @@ implements both OT-based DFI and flow-based FDFI methods.
 Key Features
 ------------
 
-- 🎯 **Multiple Explainer Types**: Tree, Linear, Kernel, and Optimal Transport explainers
-- 🧭 **OT-Based DFI**: Gaussian OT (OTExplainer) and Entropic OT (EOTExplainer)
-- 🔍 **Shared Diagnostics**: Latent independence and fidelity checks for OT/EOT/Flow
-- 📊 **Visualization**: Summary, waterfall, force, dependence, CI, and diagnostics plots
-- 📊 **Statistical Inference**: Confidence intervals and hypothesis testing
-- 🔧 **Easy to Use**: Simple API similar to SHAP
-- 🚀 **Extensible**: Built with modularity for future enhancements
+- **Multiple Explainer Types**: OTExplainer, EOTExplainer, and FlowExplainer (TreeExplainer/LinearExplainer/KernelExplainer coming soon)
+- **OT-Based DFI**: Gaussian OT (OTExplainer) and Entropic OT (EOTExplainer)
+- **Shared Diagnostics**: Latent independence (dCor) and distribution fidelity (MMD) checks for OT/EOT/Flow
+- **Visualization**: Summary, waterfall, force, dependence, CI, and diagnostics plots
+- **Statistical Inference**: Confidence intervals, one-sided tests, FDR correction, and group-level importance
+- **Easy to Use**: Simple API; background data replaces the ``predict_proba`` baseline
+- **Extensible**: Built with modularity for future enhancements
+
+.. note::
+
+   **New in 0.0.8**: :func:`~fdfi.plots.confidence_interval_plot` now supports
+   one-sided confidence intervals.  When ``conf_int()`` is called with
+   ``alternative='greater'`` or ``alternative='less'``, the plot renders the
+   open bound as a stub with a native Matplotlib caret, following forest-plot
+   conventions.  See :doc:`tutorials/confidence_intervals` for worked examples.
 
 Quick Example
 -------------
@@ -33,24 +41,20 @@ Quick Example
    from fdfi.explainers import OTExplainer
    from fdfi.plots import summary_bar
 
-   # Define your model
+   rng = np.random.default_rng(0)
+
    def model(X):
        return X.sum(axis=1)
 
-   # Create background data
-   X_background = np.random.randn(100, 10)
-
-   # Create an explainer
+   X_background = rng.standard_normal((100, 10))
    explainer = OTExplainer(model, data=X_background, nsamples=50)
 
-   # Explain test instances
-   X_test = np.random.randn(10, 10)
+   X_test = rng.standard_normal((50, 10))
    results = explainer(X_test)
 
-   # Get confidence intervals
-   ci = explainer.conf_int(alpha=0.05, target="X", alternative="two-sided")
+   # Confidence intervals (one-sided, with FDR correction)
+   ci = explainer.conf_int(alpha=0.05, alternative="greater", multitest_method="fdr_bh")
 
-   # Visualize global scores
    feature_names = [f"X{i}" for i in range(X_background.shape[1])]
    summary_bar(results["phi_X"], results["se_X"], feature_names, show=False)
 
@@ -74,6 +78,8 @@ Installation
    user_guide/installation
    user_guide/concepts
    user_guide/choosing_explainer
+   user_guide/interpreting_results
+   user_guide/statistical_inference
    user_guide/faq
 
 .. toctree::

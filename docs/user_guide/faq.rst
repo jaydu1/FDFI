@@ -104,7 +104,7 @@ Use the ``conf_int()`` method after computing importance:
    results = explainer(X_test)
    ci = explainer.conf_int(alpha=0.05, alternative="two-sided")
 
-   print("Estimates:", ci["phi_hat"])
+   print("Estimates:", ci["score"])
    print("CI Lower:", ci["ci_lower"])
    print("CI Upper:", ci["ci_upper"])
    print("P-values:", ci["pvalue"])
@@ -112,23 +112,24 @@ Use the ``conf_int()`` method after computing importance:
 What is the variance floor?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The **variance floor** is a minimum standard error applied to prevent 
-confidence intervals from being too narrow for features with very small 
-variance. This improves coverage and statistical stability.
+The **variance floor** is a minimum standard error applied to prevent
+confidence intervals from being too narrow for features with very small
+variance. This improves coverage and statistical stability.  A
+:class:`~fdfi.utils.TwoComponentMixture` is fitted to the raw standard errors;
+the upper quantile of the *smaller* (noise) component is used as the floor.
 
 .. code-block:: python
 
    ci = explainer.conf_int(
-       var_floor_method="mixture",  # Fit mixture model to estimate floor
-       var_floor_quantile=0.95,     # Use 95th percentile of smaller component
+       variance_floor_q=0.90,       # quantile of the noise component (default)
    )
 
 What is the practical margin?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The **margin** is a threshold for practical significance. Instead of testing 
-:math:`H_0: \\phi_j = 0`, you can test :math:`H_0: \\phi_j \\leq \\delta` where 
-:math:`\\delta` is a meaningful effect size.
+The **margin** is a threshold for practical significance. Instead of testing
+:math:`H_0: \phi_j = 0`, you can test :math:`H_0: \phi_j \leq \delta` where
+:math:`\delta` is a meaningful effect size.
 
 .. code-block:: python
 
@@ -136,6 +137,34 @@ The **margin** is a threshold for practical significance. Instead of testing
        margin=0.01,  # Only significant if importance > 0.01
        alternative="greater",
    )
+
+How do I run a one-sided test?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Pass ``alternative='greater'`` (or ``'less'``) to :meth:`~fdfi.explainers.Explainer.conf_int`.
+The resulting CI has an open bound (``+inf`` or ``-inf``), and
+:func:`~fdfi.plots.confidence_interval_plot` renders it automatically with a
+caret stub.
+
+.. code-block:: python
+
+   ci = explainer.conf_int(alpha=0.05, alternative="greater")
+   from fdfi.plots import confidence_interval_plot
+   confidence_interval_plot(ci, feature_names=feature_names)
+
+See :doc:`statistical_inference` for a full discussion of one-sided tests,
+variance floors, and FDR correction.
+
+How do I correct for multiple testing?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Pass ``multitest_method`` to :meth:`~fdfi.explainers.Explainer.conf_int`:
+
+.. code-block:: python
+
+   ci = explainer.conf_int(alpha=0.05, multitest_method="fdr_bh")
+   # ci["pvalue_adj"] contains Benjamini-Hochberg adjusted p-values
+   # ci["reject_null"] reflects the adjusted decision
 
 Performance Questions
 ---------------------

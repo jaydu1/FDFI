@@ -322,7 +322,6 @@ are critical
    results = cf()
 
 Hyperparameter Guidelines
--------------------------
 
 nsamples
 ~~~~~~~~
@@ -360,6 +359,25 @@ Transport target distribution:
 - ``"gaussian"``: Standard normal target (default)
 - ``"empirical"``: Permuted data as target
 
+Statistical Inference: One-sided Tests and FDR
+----------------------------------------------
+
+All working explainers support :meth:`~fdfi.explainers.Explainer.conf_int`
+with optional one-sided tests and multiple-testing correction.  Key options:
+
+.. code-block:: python
+
+   # Two-sided test (default)
+   ci = explainer.conf_int(alpha=0.05)
+
+   # One-sided (only care about positive importance)
+   ci = explainer.conf_int(alpha=0.05, alternative="greater")
+
+   # With Benjamini-Hochberg FDR correction
+   ci = explainer.conf_int(alpha=0.05, alternative="greater", multitest_method="fdr_bh")
+
+For full guidance see :doc:`statistical_inference`.
+
 Computing Confidence Intervals
 ------------------------------
 
@@ -367,16 +385,11 @@ All explainers support post-hoc confidence intervals:
 
 .. code-block:: python
 
-   # Compute importance
    results = explainer(X_test)
-
-   # Get confidence intervals
    ci = explainer.conf_int(
        alpha=0.05,
-       target="X",              # or "Z" for latent space
-       alternative="two-sided", # or "greater", "less"
-       var_floor_method="mixture",  # Stabilize small variances
-       margin=0.0,              # Practical significance threshold
+       alternative="two-sided",     # or "greater", "less"
+       margin=0.0,                  # Practical significance threshold
    )
 
    print("Significant features:", np.where(ci["reject_null"])[0])

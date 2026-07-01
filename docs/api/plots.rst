@@ -87,9 +87,31 @@ Inference and Diagnostics
 
 .. autofunction:: fdfi.plots.confidence_interval_plot
 
+``confidence_interval_plot`` accepts dictionaries returned by ``conf_int()``,
+including feature-level and grouped outputs.
+
+**One-sided confidence intervals** (added in 0.0.8)
+
+When ``conf_int()`` is called with ``alternative='greater'`` or
+``alternative='less'``, the plot automatically renders the open bound as a
+short stub with a native Matplotlib limit-indicator caret (► or ◄), following
+the forest-plot truncation convention.  Axis limits exclude the infinite bound;
+a corner annotation and one-sided hint are added to the default x-label and
+title.  New styling kwargs: ``stub_fraction`` (default ``0.06``),
+``show_alternative_note`` (default ``True``), ``note_fontsize`` (default ``8``),
+``marker`` (default ``'o'``).
+
+.. code-block:: python
+
+   from fdfi.plots import confidence_interval_plot
+
+   ci_two = explainer.conf_int(alpha=0.05, alternative="two-sided")
+   ci_gt  = explainer.conf_int(alpha=0.05, alternative="greater")
+
+   confidence_interval_plot(ci_two, feature_names=feature_names, show=False)
+   confidence_interval_plot(ci_gt,  feature_names=feature_names, show=False)
+
 .. autofunction:: fdfi.plots.diagnostics_plot
 
-``confidence_interval_plot`` accepts dictionaries returned by ``conf_int()``,
-including feature-level and grouped outputs. ``diagnostics_plot`` accepts the
-shared diagnostics dictionaries exposed by ``OTExplainer``, ``EOTExplainer``,
-and ``FlowExplainer``.
+``diagnostics_plot`` accepts the shared diagnostics dictionaries exposed by
+``OTExplainer``, ``EOTExplainer``, and ``FlowExplainer``.
