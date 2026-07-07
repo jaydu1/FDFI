@@ -2149,6 +2149,121 @@ class FlowExplainer(Explainer):
         self._cache_results(results, n)
         return results
 
+    def explain_batches(self, X: np.ndarray, batch_size: int = 50, **kwargs: Any) -> dict:
+        """
+        Compute feature importance in batches and aggregate over all rows.
+
+        This is useful when ``self(X)`` is too memory intensive for moderate or
+        large analysis matrices.  The method evaluates every row of ``X``,
+        stores the full per-sample UEIF matrices on the explainer, updates the
+        standard cached results used by ``conf_int()`` and ``summary()``, and
+        returns the same result dictionary shape as ``__call__``.
+
+        Parameters
+        ----------
+        X : numpy.ndarray
+            Input data to explain. Shape (n_samples, n_features).
+        batch_size : int, default=50
+            Number of rows to process per batch.
+        **kwargs : dict
+            Reserved for API compatibility.
+
+        Returns
+        -------
+        dict
+            Dictionary containing feature-level X-space and Z-space estimates,
+            standard deviations, and standard errors.
+        """
+        X = np.asarray(X)
+        if X.ndim != 2:
+            raise ValueError("X must be a 2D array.")
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive.")
+
+        n, d = X.shape
+        Z = self._encode_to_Z(X)
+        X_hat = self._decode_to_X(Z)
+        y_pred = self.model(X_hat)
+
+        ueifs_cpi_batches = []
+        ueifs_scpi_batches = []
+        for start in range(0, n, batch_size):
+            stop = min(start + batch_size, n)
+            ueifs_cpi_b, ueifs_scpi_b = self._phi_Z(Z[start:stop], y_pred[start:stop])
+            ueifs_cpi_batches.append(ueifs_cpi_b)
+            ueifs_scpi_batches.append(ueifs_scpi_b)
+
+        ueifs_cpi = np.vstack(ueifs_cpi_batches)
+        ueifs_scpi = np.vstack(ueifs_scpi_batches)
+
+        jacobian_mode = self.kwargs.get("jacobian_mode", "average")
+        n_jac = self.kwargs.get("jacobian_n_samples", 100)
+        if jacobian_mode == "per_sample":
+            H_batches = []
+            for start in range(0, n, batch_size):
+                stop = min(start + batch_size, n)
+                H_batches.append(self.flow_model.Jacobi_Batch(Z[start:stop]))
+            H_sq_batch = np.concatenate(H_batches, axis=0) ** 2
+            ueifs_cpi_X = np.einsum("ilk,ik->il", H_sq_batch, ueifs_cpi)
+            ueifs_scpi_X = np.einsum("ilk,ik->il", H_sq_batch, ueifs_scpi)
+        elif jacobian_mode == "avg_sq":
+            n_est = min(n, n_jac)
+            H_batch = self.flow_model.Jacobi_Batch(Z[:n_est])
+            H_sq_avg = (H_batch ** 2).mean(axis=0)
+            ueifs_cpi_X = ueifs_cpi @ H_sq_avg.T
+            ueifs_scpi_X = ueifs_scpi @ H_sq_avg.T
+        else:
+            H = self._compute_jacobian(Z)
+            H_sq = H ** 2
+            ueifs_cpi_X = ueifs_cpi @ H_sq.T
+            ueifs_scpi_X = ueifs_scpi @ H_sq.T
+
+        if self.method == "scpi":
+            self.ueifs_Z = ueifs_scpi
+            self.ueifs_X = ueifs_scpi_X
+        else:
+            self.ueifs_Z = ueifs_cpi
+            self.ueifs_X = ueifs_cpi_X
+
+        ddof = 1 if n > 1 else 0
+        results = {}
+        if self.method == "cpi":
+            results.update({
+                "phi_Z": ueifs_cpi.mean(axis=0),
+                "std_Z": ueifs_cpi.std(axis=0),
+                "se_Z": ueifs_cpi.std(axis=0, ddof=ddof) / np.sqrt(n),
+                "phi_X": ueifs_cpi_X.mean(axis=0),
+                "std_X": ueifs_cpi_X.std(axis=0),
+                "se_X": ueifs_cpi_X.std(axis=0, ddof=ddof) / np.sqrt(n),
+            })
+        elif self.method == "scpi":
+            results.update({
+                "phi_Z": ueifs_scpi.mean(axis=0),
+                "std_Z": ueifs_scpi.std(axis=0),
+                "se_Z": ueifs_scpi.std(axis=0, ddof=ddof) / np.sqrt(n),
+                "phi_X": ueifs_scpi_X.mean(axis=0),
+                "std_X": ueifs_scpi_X.std(axis=0),
+                "se_X": ueifs_scpi_X.std(axis=0, ddof=ddof) / np.sqrt(n),
+            })
+        else:
+            results.update({
+                "phi_Z": ueifs_cpi.mean(axis=0),
+                "std_Z": ueifs_cpi.std(axis=0),
+                "se_Z": ueifs_cpi.std(axis=0, ddof=ddof) / np.sqrt(n),
+                "phi_X": ueifs_cpi_X.mean(axis=0),
+                "std_X": ueifs_cpi_X.std(axis=0),
+                "se_X": ueifs_cpi_X.std(axis=0, ddof=ddof) / np.sqrt(n),
+                "phi_Z_scpi": ueifs_scpi.mean(axis=0),
+                "std_Z_scpi": ueifs_scpi.std(axis=0),
+                "se_Z_scpi": ueifs_scpi.std(axis=0, ddof=ddof) / np.sqrt(n),
+                "phi_X_scpi": ueifs_scpi_X.mean(axis=0),
+                "std_X_scpi": ueifs_scpi_X.std(axis=0),
+                "se_X_scpi": ueifs_scpi_X.std(axis=0, ddof=ddof) / np.sqrt(n),
+            })
+
+        self._cache_results(results, n)
+        return results
+
 
 class Crossfitting(Explainer):
     """
