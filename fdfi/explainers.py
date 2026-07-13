@@ -16,6 +16,7 @@ from .utils import (
     compute_latent_independence,
     compute_mmd,
 )
+from .losses import resolve_loss
 
 
 
@@ -36,7 +37,15 @@ class Explainer:
     data : numpy.ndarray, optional
         Background data to use for explanations.
     **kwargs : dict
-        Additional parameters for the explainer.
+        Additional parameters for the explainer.  Notable keys:
+
+        - ``loss`` (str or callable, default ``None`` → squared error): the loss
+          ``L(y_true, y_pred)`` used to define importance.  String keys such as
+          ``'l1'``, ``'huber'``, ``'pinball'``, ``'log_loss'``, ``'brier'`` are
+          accepted (see :func:`fdfi.losses.available_losses`), or pass any
+          callable returning the per-sample loss.  Passing true labels ``y`` at
+          call time uses the loss-difference (DFI) form; otherwise a label-free
+          divergence from the model's own prediction is used.
     
     Attributes
     ----------
@@ -80,6 +89,10 @@ class Explainer:
         self.ueifs_X = None
         self.ueifs_Z = None
         self.verbose = kwargs.get("verbose", False)
+        # Loss used to define feature importance. ``None`` → squared error,
+        # which reduces the DFI score to the classic difference of L2 residuals.
+        self.loss = kwargs.get("loss", None)
+        self._loss = resolve_loss(self.loss)
         self.diagnostics = None
         self.compute_diagnostics = kwargs.get("compute_diagnostics", True)
         self.diagnostics_subset_max_samples = kwargs.get(
@@ -112,6 +125,86 @@ class Explainer:
     def _cache_results(self, results: dict, n: int) -> None:
         self._last_results = results
         self._last_n = n
+
+    def _ueif_from_counterfactuals(
+        self,
+        y_pred: np.ndarray,
+        y_tilde_all: np.ndarray,
+        method: str = "cpi",
+        y_true: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """
+        Per-feature uncentered EIF from counterfactual predictions.
+
+        Generalises the L2 residual-difference importance to an arbitrary loss
+        ``L = self._loss``.  Two averaging orders (formalised in the FDFI docs)
+        are selected via ``method``:
+
+        - ``'cpi'`` (Conditional Permutation Importance): average the
+          counterfactual *prediction* over the Monte-Carlo replicates first,
+          then apply the loss — ``L(r, E_b[ŷ_b])``.
+        - ``'scpi'`` (Sobol-CPI): apply the loss to *each* replicate first, then
+          average — ``E_b[L(r, ŷ_b)]``.
+
+        When ``y_true`` is provided the score is a difference of losses (the DFI
+        / LOCO form, centred near zero for null features)::
+
+            UEIF = agg_b L(y_true, ŷ_b) - L(y_true, ŷ)
+
+        Otherwise it is the label-free form that uses the model's own prediction
+        ``ŷ`` as the reference and subtracts the self-loss floor::
+
+            UEIF = agg_b L(ŷ, ŷ_b) - L(ŷ, ŷ)
+
+        For the squared error (and other losses with ``L(a, a) = 0``) this is the
+        prediction shift ``(ŷ - ŷ_b)²``.  For a proper scoring rule such as
+        log-loss or Brier it is the associated Bregman divergence between the
+        baseline and counterfactual predictions (e.g. ``KL(ŷ ‖ ŷ_b)`` for
+        log-loss), which is non-negative and ~0 for null features.  Non-proper /
+        discontinuous losses (e.g. ``zero_one``) are not meaningful label-free
+        and should be used with ``y_true``.
+
+        Parameters
+        ----------
+        y_pred : ndarray of shape (n,)
+            Model predictions on the observed inputs (the baseline ``ŷ``).
+        y_tilde_all : ndarray of shape (B, n)
+            Counterfactual predictions for the ``B`` Monte-Carlo replicates of
+            the perturbed feature.
+        method : {'cpi', 'scpi'}, default='cpi'
+            Averaging order (see above).
+        y_true : ndarray of shape (n,), optional
+            True outcomes.  When omitted, the label-free divergence form above is
+            used.
+
+        Returns
+        -------
+        ndarray of shape (n,)
+            Per-sample uncentered EIF for the feature.
+        """
+        loss = self._loss
+        method = (method or "cpi").lower()
+        if method not in ("cpi", "scpi"):
+            raise ValueError(f"method must be 'cpi' or 'scpi', got {method!r}")
+
+        if y_true is None:
+            # Label-free: reference is the model's own prediction; subtract the
+            # self-loss floor L(ŷ, ŷ) so null features stay near zero. This is 0
+            # for regression losses and the predictive entropy for proper
+            # scoring rules (giving a Bregman divergence).
+            ref = np.asarray(y_pred)
+            base = loss(ref, ref)
+        else:
+            ref = np.asarray(y_true)
+            base = loss(ref, y_pred)
+
+        if method == "cpi":
+            agg = loss(ref, y_tilde_all.mean(axis=0))
+        else:  # scpi
+            agg = loss(ref[None, :], y_tilde_all).mean(axis=0)
+
+        return agg - base
+
 
     def _adjust_se(
         self,
@@ -1100,6 +1193,14 @@ class OTExplainer(Explainer):
         * ``'normal'`` – draw i.i.d. standard normal samples.
     random_state : int, default=0
         Seed for the random number generator used in resampling.
+    method : {'cpi', 'scpi'}, default='cpi'
+        Averaging order for the counterfactual predictions:
+
+        * ``'cpi'`` – average the prediction over resamples first, then apply
+          the loss (``L(r, E_b[ŷ_b])``).
+        * ``'scpi'`` – apply the loss per resample first, then average
+          (``E_b[L(r, ŷ_b)]``; for squared error this equals CPI plus the
+          prediction variance).
     verbose : bool, default=False
         Print progress messages during setup and inference.
     compute_diagnostics : bool, default=True
@@ -1163,6 +1264,7 @@ class OTExplainer(Explainer):
         nsamples: int = 50,
         sampling_method: str = "resample",
         random_state: int = 0,
+        method: str = "cpi",
         **kwargs: Any
     ):
         """Initialize the OTExplainer."""
@@ -1171,6 +1273,7 @@ class OTExplainer(Explainer):
         self.regularize = kwargs.get("regularize", 1e-6)
         self.sampling_method = sampling_method
         self.random_state = random_state
+        self.method = method
 
        
         self.mean = np.mean(data, axis=0, keepdims=True)
@@ -1190,7 +1293,7 @@ class OTExplainer(Explainer):
         self.Z_full = (data - self.mean) @ self.L_inv
         self._compute_diagnostics(report_title="OTExplainer")
 
-    def __call__(self, X: np.ndarray, **kwargs: Any) -> np.ndarray:
+    def __call__(self, X: np.ndarray, y: Optional[np.ndarray] = None, **kwargs: Any) -> np.ndarray:
        
         n, d = X.shape
         Z = (X - self.mean) @ self.L_inv
@@ -1200,7 +1303,7 @@ class OTExplainer(Explainer):
         
        
         # get per-sample UEIFs in latent space (n_samples, n_features)
-        ueifs_Z = self._phi_Z(Z, y_pred)
+        ueifs_Z = self._phi_Z(Z, y_pred, y_true=y)
 
         # Jacobian sensitivity matrix (constant for linear mapping)
         H = self.L ** 2
@@ -1233,8 +1336,21 @@ class OTExplainer(Explainer):
         self._cache_results(results, n)
         return results
 
-    def _phi_Z(self, Z: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
-       
+    def _phi_Z(
+        self,
+        Z: np.ndarray,
+        y_pred: np.ndarray,
+        y_true: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Per-sample uncentered EIF in Z-space via counterfactual resampling.
+
+        For each feature ``j`` the j-th latent coordinate is replaced by
+        independent draws and importance is scored through ``self._loss`` using
+        the CPI/SCPI averaging order given by ``self.method``.  With the default
+        squared-error loss and no ``y_true`` this reduces to the L2 prediction
+        shift ``(ŷ - E_b[ŷ_b])²``; with ``y_true`` it becomes the DFI residual
+        difference ``L(y, ŷ_b) - L(y, ŷ)``.
+        """
         n, d = Z.shape
         ueifs_Z = np.zeros((n, d))
         
@@ -1261,9 +1377,11 @@ class OTExplainer(Explainer):
             X_tilde_flat = Z_tilde_flat @ self.L + self.mean
             
             y_tilde_flat = self.model(X_tilde_flat)
-            y_tilde = y_tilde_flat.reshape(self.nsamples, n).mean(axis=0)
+            y_tilde_all = y_tilde_flat.reshape(self.nsamples, n)
             
-            ueifs_Z[:, j] = (y_pred - y_tilde) ** 2
+            ueifs_Z[:, j] = self._ueif_from_counterfactuals(
+                y_pred, y_tilde_all, method=self.method, y_true=y_true
+            )
 
         # Return per-sample UEIFs in latent space (no aggregation here)
         return ueifs_Z
@@ -1322,6 +1440,9 @@ class EOTExplainer(Explainer):
         - 'normal': sample from N(0, 1)
     random_state : int, default=0
         Random seed for reproducibility.
+    method : {'cpi', 'scpi'}, default='cpi'
+        Averaging order for counterfactual predictions (CPI averages the
+        prediction before the loss; SCPI averages the per-resample loss).
     **kwargs : dict
         Extra arguments forwarded to the base Explainer.
     """
@@ -1334,6 +1455,7 @@ class EOTExplainer(Explainer):
         auto_epsilon: bool = False,
         sampling_method: str = "resample",
         random_state: int = 0,
+        method: str = "cpi",
         **kwargs: Any
     ):
         super().__init__(model, data, fit_flow=False, **kwargs)
@@ -1342,6 +1464,7 @@ class EOTExplainer(Explainer):
         self.auto_epsilon = auto_epsilon
         self.sampling_method = sampling_method
         self.random_state = random_state
+        self.method = method
         self.regularize = kwargs.get("regularize", 1e-6)
 
         # ── Gaussian whitening ───────────────────────────────────────────
@@ -1418,17 +1541,19 @@ class EOTExplainer(Explainer):
     def _phi_Z(self, Z: np.ndarray, y_pred: np.ndarray, y_true: Optional[np.ndarray] = None) -> np.ndarray:
         """Compute per-sample uncentered UEIF in Z-space via counterfactual resampling.
 
-        For each feature j, replaces Z_j with independent draws and measures
-        either the change in squared residuals (DFI paper formula) or the
-        squared prediction shift (CPI formula):
+        For each feature j, replaces Z_j with independent draws and scores the
+        result through ``self._loss`` using the CPI/SCPI averaging order in
+        ``self.method``:
 
-            DFI formula (y_true provided):
-                UEIF_{i,j} = (y_i - ȳ_{-j,i})² - (y_i - ŷ_i)²
-            CPI formula (default, y_true=None):
-                UEIF_{i,j} = (ŷ_i - ȳ_{-j,i})²
+            DFI / loss-difference form (y_true provided):
+                UEIF_{i,j} = agg_b L(y_i, ŷ_{b,i}) - L(y_i, ŷ_i)
+            prediction-shift form (default, y_true=None; squared error only):
+                UEIF_{i,j} = agg_b L(ŷ_i, ŷ_{b,i})
 
-        The DFI formula is centered near zero for null features and is the
-        formula used in the DFI paper (Williamson & Feng, 2023).
+        where ``agg_b`` averages the prediction first (CPI) or the loss first
+        (SCPI).  With the default squared-error loss the DFI form reduces to
+        ``(y_i - ȳ_{-j,i})² - (y_i - ŷ_i)²`` (Williamson & Feng, 2023), which is
+        centered near zero for null features.
 
         Parameters
         ----------
@@ -1437,8 +1562,9 @@ class EOTExplainer(Explainer):
         y_pred : (n,) array
             Model predictions on the original X.
         y_true : (n,) array or None
-            True outcome values.  When provided, uses the DFI formula which
-            enables proper null-feature thresholding.
+            True outcome values.  When provided, uses the DFI loss-difference form
+            and enables proper null-feature thresholding; when omitted, the
+            label-free divergence form is used.
         """
         n, d = Z.shape
         ueifs_Z = np.zeros((n, d))
@@ -1463,11 +1589,10 @@ class EOTExplainer(Explainer):
 
             Z_flat = Z_tilde.reshape(-1, d)
             X_tilde = Z_flat @ L_z + self.mean
-            y_tilde = self.model(X_tilde).reshape(self.nsamples, n).mean(axis=0)
-            if y_true is not None:
-                ueifs_Z[:, j] = (y_true - y_tilde) ** 2 - (y_true - y_pred) ** 2
-            else:
-                ueifs_Z[:, j] = (y_pred - y_tilde) ** 2
+            y_tilde_all = self.model(X_tilde).reshape(self.nsamples, n)
+            ueifs_Z[:, j] = self._ueif_from_counterfactuals(
+                y_pred, y_tilde_all, method=self.method, y_true=y_true
+            )
 
         return ueifs_Z
 
@@ -1925,23 +2050,32 @@ class FlowExplainer(Explainer):
         H_avg = H_sum / n_samples
         return H_avg
     
-    def _phi_Z(self, Z: np.ndarray, y: np.ndarray) -> tuple:
+    def _phi_Z(self, Z: np.ndarray, y: np.ndarray, y_true: Optional[np.ndarray] = None) -> tuple:
         """
-        Compute CPI and SCPI importance in Z-space.
-        
-        CPI: Squared difference after averaging predictions: (Y - E[Ỹ])^2
-        SCPI: Conditional variance of counterfactual predictions: Var[Ỹ]
-        
-        For L2 loss with independent features, CPI ≈ SCPI because both measure
-        the explanatory power of feature j through disentangled perturbation.
-        
+        Compute CPI and SCPI importance in Z-space through ``self._loss``.
+
+        Both scores use the counterfactual predictions for feature ``j`` but
+        differ in the averaging order:
+
+        - CPI: average the prediction first, then apply the loss
+          ``L(r, E_b[Ỹ])``.
+        - SCPI: apply the loss per Monte-Carlo replicate first, then average
+          ``E_b[L(r, Ỹ)]``.
+
+        Here ``r`` is ``y_true`` when supplied (loss-difference / DFI form) or
+        the baseline prediction ``y`` otherwise (prediction-shift form, defined
+        only for the squared-error loss).
+
         Parameters
         ----------
         Z : numpy.ndarray
             Latent space data, shape (n, d).
         y : numpy.ndarray
-            Model predictions, shape (n,).
-        
+            Baseline model predictions, shape (n,).
+        y_true : numpy.ndarray, optional
+            True outcomes, shape (n,).  When provided, uses the DFI loss-difference
+            form; when omitted, the label-free divergence form is used.
+
         Returns
         -------
         ueifs_cpi : numpy.ndarray
@@ -1996,20 +2130,23 @@ class FlowExplainer(Explainer):
             y_tilde_flat = self.model(X_tilde_flat)
             y_tilde = y_tilde_flat.reshape(self.nsamples, n)
             
-            # CPI: average predictions first, then squared difference
-            # Formula: φ_j^CPI = (Y - E[Ỹ])²
-            y_tilde_mean = y_tilde.mean(axis=0)
-            ueifs_cpi[:, j] = (y - y_tilde_mean) ** 2
+            # CPI: average the prediction first, then apply the loss.
+            #   φ_j^CPI = L(r, E_b[Ỹ])   with r = y_true or the baseline prediction
+            ueifs_cpi[:, j] = self._ueif_from_counterfactuals(
+                y, y_tilde, method="cpi", y_true=y_true
+            )
             
-            # SCPI (Sobol-CPI): variance of counterfactual predictions
-            # Formula: φ_j^SCPI = Var(Ỹ) = E[Ỹ²] - E[Ỹ]²
-            # This measures the conditional variance, matching Sobol total-order index
-            # For L2 loss with independent features, SCPI ≈ CPI
-            ueifs_scpi[:, j] = y_tilde.var(axis=0)
+            # SCPI (Sobol-CPI): apply the loss per replicate, then average.
+            #   φ_j^SCPI = E_b[L(r, Ỹ)]
+            # For squared error this equals CPI + Var_b(Ỹ), matching the
+            # documented SCPI = E_b[(Y - f(X̃_b))²].
+            ueifs_scpi[:, j] = self._ueif_from_counterfactuals(
+                y, y_tilde, method="scpi", y_true=y_true
+            )
         
         return ueifs_cpi, ueifs_scpi
     
-    def __call__(self, X: np.ndarray, **kwargs: Any) -> dict:
+    def __call__(self, X: np.ndarray, y: Optional[np.ndarray] = None, **kwargs: Any) -> dict:
         """
         Compute feature importance.
         
@@ -2017,6 +2154,10 @@ class FlowExplainer(Explainer):
         ----------
         X : numpy.ndarray
             Input data to explain. Shape (n_samples, n_features).
+        y : numpy.ndarray, optional
+            True outcomes, shape (n_samples,). When provided, uses the DFI
+            loss-difference form; when omitted, the label-free divergence form
+            is used.
         **kwargs : dict
             Additional parameters (unused, for API compatibility).
         
@@ -2042,7 +2183,7 @@ class FlowExplainer(Explainer):
         y_pred = self.model(X_hat)
         
         # Compute both CPI and SCPI in Z-space (per-sample UEIFs)
-        ueifs_cpi, ueifs_scpi = self._phi_Z(Z, y_pred)
+        ueifs_cpi, ueifs_scpi = self._phi_Z(Z, y_pred, y_true=y)
         
         # Transform per-sample UEIFs from Z-space to X-space via Jacobian H = dX/dZ
         # ueifs_X[i, l] = sum_k H[l,k]^2 * ueifs_Z[i, k]
@@ -2286,7 +2427,7 @@ class Crossfitting(Explainer):
             Z = explainer._encode_to_Z(X_test)
             X_hat = explainer._decode_to_X(Z)
             y_pred = explainer.model(X_hat)
-            ueifs_cpi, ueifs_scpi = explainer._phi_Z(Z, y_pred)
+            ueifs_cpi, ueifs_scpi = explainer._phi_Z(Z, y_pred, y_true=y_test)
             jacobian_mode = explainer.kwargs.get("jacobian_mode", "average")
             n_jac = explainer.kwargs.get("jacobian_n_samples", 100)
             n_test = Z.shape[0]
@@ -2322,7 +2463,7 @@ class Crossfitting(Explainer):
             ueifs_X = ueifs_Z @ (explainer.W ** 2).T
         elif isinstance(explainer, OTExplainer):
             Z = (X_test - explainer.mean) @ explainer.L_inv
-            ueifs_Z = explainer._phi_Z(Z, y_pred)
+            ueifs_Z = explainer._phi_Z(Z, y_pred, y_true=y_test)
             H = explainer.L ** 2
             ueifs_X = ueifs_Z @ H.T
         else:

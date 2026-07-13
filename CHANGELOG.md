@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.0.9] - 2026-07-13
+### Added
+- **Arbitrary loss functions**: importance can now be defined through any per-sample loss instead of only the squared-error (L2) residual difference. New `fdfi/losses.py` registry provides regression losses (`squared_error`/`l2`, `absolute_error`/`l1`, `huber`, `pinball`) and binary-classification losses (`log_loss`/`bce`, `brier`, `zero_one`), plus `resolve_loss()`/`available_losses()`. Custom callables `loss(y_true, y_pred)` are also accepted.
+- **`loss` argument** on `OTExplainer`, `EOTExplainer`, `FlowExplainer`, and `Crossfitting` (default squared error → unchanged behaviour). Passing true labels `y` at call time uses the loss-difference (DFI) form; when `y` is omitted a label-free form is used that references the model's own prediction — the prediction shift for regression losses and a Bregman divergence (e.g. KL for log-loss) for proper scoring rules.
+- **`method='cpi'|'scpi'`** now available on `OTExplainer` and `EOTExplainer` (previously only `FlowExplainer`), selecting the averaging order for the counterfactual prediction (CPI averages the prediction before the loss; SCPI averages the per-sample loss).
+- New tests: `tests/test_losses.py` (registry/built-ins) and loss-integration tests in `tests/test_explainers.py` (L2 parity, regression/classification losses, CPI/SCPI, guards, cross-fitting).
+
+### Changed
+- `FlowExplainer` SCPI now follows the documented definition `E_b[L(Y, f(X̃_b))]` (for squared error, equal to CPI plus the prediction variance) rather than the raw prediction variance, making SCPI consistent across all explainers.
+- Updated `docs/user_guide/concepts.rst`, `docs/user_guide/choosing_explainer.rst`, and `docs/api/explainers.rst` to document loss selection and the generalized CPI/SCPI formulas.
+
 ## [0.0.8] - 2026-06-30
 ### Added
 - **One-sided confidence interval plots**: `confidence_interval_plot()` now detects `alternative='greater'` or `alternative='less'` in the `conf_int()` result dict and renders the open bound as a short stub with a native matplotlib limit-indicator caret (►/◄ via `xuplims`/`xlolims`), following the forest-plot truncation convention. Axis limits exclude the infinite bound; a corner annotation and one-sided hint are added to the default xlabel and title.

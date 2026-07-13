@@ -77,25 +77,56 @@ space Z where features are approximately independent.
 
 **CPI (Conditional Permutation Importance)**
 
-Averages predictions first, then computes squared difference:
+Averages the counterfactual prediction first, then applies the loss:
 
 .. math::
 
-   \phi_{Z,j}^{CPI} = (Y - \mathbb{E}_b[f(\tilde{X}_b^{(j)})])^2
+   \phi_{Z,j}^{CPI} = L\!\big(Y,\; \mathbb{E}_b[f(\tilde{X}_b^{(j)})]\big)
+   \; - \; L\!\big(Y, f(X)\big)
 
 where :math:`\tilde{X}_b^{(j)} = T^{-1}(\tilde{Z}_b^{(j)})` and 
-:math:`\tilde{Z}_b^{(j)}` has the j-th component replaced with sample b.
+:math:`\tilde{Z}_b^{(j)}` has the j-th component replaced with sample b, and
+:math:`L` is a per-sample loss.
 
 **SCPI (Sobol-CPI)**
 
-Computes squared differences first for each Monte Carlo sample, then averages:
+Applies the loss to each Monte Carlo sample first, then averages:
 
 .. math::
 
-   \phi_{Z,j}^{SCPI} = \mathbb{E}_b[(Y - f(\tilde{X}_b^{(j)}))^2]
+   \phi_{Z,j}^{SCPI} = \mathbb{E}_b\!\big[L\!\big(Y, f(\tilde{X}_b^{(j)})\big)\big]
+   \; - \; L\!\big(Y, f(X)\big)
 
-This is equivalent to the Sobol sensitivity index formulation. The key 
-difference from CPI is the **order of averaging**.
+The key difference from CPI is the **order of averaging**; the two coincide for
+a linear loss and differ by a Jensen gap otherwise. For the squared-error loss,
+:math:`\phi^{SCPI} = \phi^{CPI} + \mathrm{Var}_b[f(\tilde{X}_b)]`, recovering the
+Sobol total-order sensitivity index.
+
+**Choosing a loss**
+
+By default :math:`L` is the squared error, so the score reduces to the classic
+difference of L2 residuals. Any regression loss (``'l1'``, ``'huber'``,
+``'pinball'``) or binary-classification loss (``'log_loss'``, ``'brier'``,
+``'zero_one'``) can be selected via the ``loss`` argument, or a custom callable
+``loss(y_true, y_pred)`` supplied directly.
+
+If the true labels ``y`` are passed at call time
+(``explainer(X_test, y=y_test)``), the score is the loss-difference (DFI / LOCO)
+form, which is centred near zero for null features. If ``y`` is omitted, a
+label-free form is used that references the model's own prediction and subtracts
+the self-loss floor:
+
+.. math::
+
+   \phi_{Z,j} = \operatorname*{agg}_b L(\hat{Y}, f(\tilde{X}_b^{(j)}))
+   \; - \; L(\hat{Y}, \hat{Y}), \qquad \hat{Y} = f(X).
+
+For losses with :math:`L(a, a) = 0` (squared error, L1, Huber, pinball) this is
+the prediction shift under that loss. For a proper scoring rule (log-loss,
+Brier) it is the associated Bregman divergence between the baseline and
+counterfactual predictions (e.g. :math:`\mathrm{KL}(\hat{Y}\,\|\,f(\tilde{X}_b))`
+for log-loss), which is non-negative and ~0 for null features. Non-proper or
+discontinuous losses (e.g. ``'zero_one'``) are only meaningful with ``y``.
 
 **Jacobian Transformation to X-space**
 

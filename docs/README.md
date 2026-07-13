@@ -5,7 +5,7 @@ orphan: true
 # FDFI Documentation
 
 This is the documentation source for FDFI (Flow-Disentangled Feature Importance).
-Current documented release: `0.0.8`.
+Current documented release: `0.0.9`.
 
 For the full documentation, see the main README in the project root or build the docs:
 

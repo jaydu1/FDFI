@@ -157,19 +157,49 @@ underlying distribution structure
 
 **Understanding CPI vs SCPI:**
 
-- **CPI (Conditional Permutation Importance)**: Average predictions first, then 
-  compute squared difference:
+- **CPI (Conditional Permutation Importance)**: Average the counterfactual
+  prediction first, then apply the loss:
   
   .. math::
   
-     \phi_j^{CPI} = (Y - E_b[f(\tilde{X}_b^{(j)})])^2
+     \phi_j^{CPI} = L\big(Y, E_b[f(\tilde{X}_b^{(j)})]\big) - L\big(Y, f(X)\big)
   
-- **SCPI (Sobol-CPI)**: Compute squared differences first, then average (Sobol
-  sensitivity index formulation):
+- **SCPI (Sobol-CPI)**: Apply the loss per Monte Carlo sample first, then
+  average:
   
   .. math::
   
-     \phi_j^{SCPI} = E_b[(Y - f(\tilde{X}_b^{(j)}))^2]
+     \phi_j^{SCPI} = E_b\big[L\big(Y, f(\tilde{X}_b^{(j)})\big)\big] - L\big(Y, f(X)\big)
+
+The ``method`` argument (``'cpi'`` or ``'scpi'``) is available on ``OTExplainer``,
+``EOTExplainer``, and ``FlowExplainer``.
+
+**Choosing a loss:**
+
+The importance score is defined through a loss ``L(y_true, y_pred)``. By default
+this is the squared error, so the score is the classic difference of L2
+residuals. The ``loss`` argument (orthogonal to ``method``) selects another
+loss:
+
+- **Regression:** ``'squared_error'`` (``'l2'``/``'mse'``), ``'absolute_error'``
+  (``'l1'``/``'mae'``), ``'huber'``, ``'pinball'`` (``'quantile'``).
+- **Binary classification:** ``'log_loss'`` (``'bce'``/``'cross_entropy'``),
+  ``'brier'``, ``'zero_one'`` — the model must output a probability ``P(y=1)``.
+- **Custom:** any callable ``loss(y_true, y_pred)`` returning the per-sample loss.
+
+Passing the true labels ``y`` at call time uses the loss-difference (DFI) form,
+which is preferred for interpretability (null features ~0):
+
+.. code-block:: python
+
+   explainer = OTExplainer(model, X_background, loss="log_loss")
+   results = explainer(X_test, y=y_test)   # DFI loss-difference form
+
+If ``y`` is omitted, a label-free form referencing the model's own prediction is
+used instead: :math:`\operatorname{agg}_b L(\hat{Y}, f(\tilde{X}_b)) - L(\hat{Y}, \hat{Y})`.
+This is the prediction shift for regression losses and a Bregman divergence
+(e.g. KL for log-loss) for proper scoring rules. Non-proper losses such as
+``'zero_one'`` should always be used with ``y``.
 
 **External flow models:**
 

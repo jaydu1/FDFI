@@ -7,7 +7,7 @@
 
 A Python library for computing feature importance using disentangled methods, inspired by SHAP.
 
-Current release: `0.0.7`
+Current release: `0.0.9`
 
 ## Overview
 

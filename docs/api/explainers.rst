@@ -30,6 +30,40 @@ The following methods are available on all working explainer classes
     (Re-)compute latent independence (dCor) and distribution fidelity (MMD)
     diagnostics.
 
+Loss Functions
+--------------
+
+The importance score is defined through a per-sample loss ``L(y_true, y_pred)``.
+All working explainers accept a ``loss`` argument (default: squared error, which
+recovers the classic difference of L2 residuals) and a ``method`` argument
+(``'cpi'`` or ``'scpi'``) controlling the averaging order.
+
+- **Regression losses:** ``'squared_error'`` (``'l2'``/``'mse'``),
+  ``'absolute_error'`` (``'l1'``/``'mae'``), ``'huber'``, ``'pinball'``.
+- **Classification losses:** ``'log_loss'`` (``'bce'``/``'cross_entropy'``),
+  ``'brier'``, ``'zero_one'`` — the model must output a probability ``P(y=1)``.
+- **Custom:** any callable ``loss(y_true, y_pred)`` returning the per-sample loss.
+
+Passing true labels ``y`` at call time (``explainer(X_test, y=y_test)``) uses the
+loss-difference (DFI) form. If ``y`` is omitted, a label-free form referencing the
+model's own prediction is used (prediction shift for regression losses; a Bregman
+divergence such as KL for proper scoring rules). Non-proper losses like
+``'zero_one'`` should be used with ``y``.
+
+.. code-block:: python
+
+   from fdfi.explainers import OTExplainer
+
+   # Binary classification with log loss (model must output probabilities)
+   def prob_model(X):
+       return clf.predict_proba(X)[:, 1]
+
+   explainer = OTExplainer(prob_model, X_background, loss="log_loss")
+   results = explainer(X_test, y=y_test)
+
+.. automodule:: fdfi.losses
+   :members: resolve_loss, available_losses, squared_error, absolute_error, huber, pinball, log_loss, brier, zero_one
+
 Base Explainer
 --------------
 
@@ -157,8 +191,11 @@ The ``FlowExplainer`` implements Flow-Disentangled Feature Importance using
 normalizing flows. It supports both CPI (Conditional Permutation Importance) 
 and SCPI (Sobol-CPI). The key difference is the order of averaging:
 
-- **CPI**: Average predictions first, then squared difference: $(Y - E[f(\tilde{X})])^2$
-- **SCPI**: Squared differences first, then average: $E[(Y - f(\tilde{X}_b))^2]$
+- **CPI**: Average the prediction first, then apply the loss: $L(Y, E_b[f(\tilde{X}_b)])$
+- **SCPI**: Apply the loss per sample first, then average: $E_b[L(Y, f(\tilde{X}_b))]$
+
+Both use the configurable ``loss`` (default squared error); for the squared-error
+loss, $\phi^{SCPI} = \phi^{CPI} + \mathrm{Var}_b[f(\tilde{X}_b)]$.
 
 .. autoclass:: fdfi.explainers.FlowExplainer
    :members:

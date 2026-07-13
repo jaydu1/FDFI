@@ -49,8 +49,28 @@ __author__ = "FDFI Team"
 # from .explainers import Explainer, TreeExplainer, LinearExplainer, KernelExplainer
 # from .plots import summary_plot, waterfall_plot, force_plot, dependence_plot
 from .explainers import Crossfitting
+from .losses import (
+    resolve_loss,
+    available_losses,
+    squared_error,
+    absolute_error,
+    huber,
+    pinball,
+    log_loss,
+    brier,
+    zero_one,
+)
 
 __all__ = [
     "__version__",
     "Crossfitting",
+    "resolve_loss",
+    "available_losses",
+    "squared_error",
+    "absolute_error",
+    "huber",
+    "pinball",
+    "log_loss",
+    "brier",
+    "zero_one",
 ]
