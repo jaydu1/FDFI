@@ -18,7 +18,7 @@ Then install FDFI:
 
 .. code-block:: bash
 
-   git clone https://github.com/jaydu1/FDFI.git
+   git clone https://github.com/jinhongdu-lab/FDFI.git
    cd FDFI
    pip install -e .
 
@@ -27,7 +27,7 @@ From Source with pip
 
 .. code-block:: bash
 
-   git clone https://github.com/jaydu1/FDFI.git
+   git clone https://github.com/jinhongdu-lab/FDFI.git
    cd FDFI
    pip install -e .
 

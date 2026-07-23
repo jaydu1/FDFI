@@ -63,7 +63,7 @@ Installation
 
 .. code-block:: bash
 
-   git clone https://github.com/jaydu1/FDFI.git
+   git clone https://github.com/jinhongdu-lab/FDFI.git
    cd FDFI
    pip install -e .
 

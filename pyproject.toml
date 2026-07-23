@@ -61,10 +61,10 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/jaydu1/FDFI"
-Documentation = "https://github.com/jaydu1/FDFI"
-Repository = "https://github.com/jaydu1/FDFI"
-Issues = "https://github.com/jaydu1/FDFI/issues"
+Homepage = "https://github.com/jinhongdu-lab/FDFI"
+Documentation = "https://github.com/jinhongdu-lab/FDFI"
+Repository = "https://github.com/jinhongdu-lab/FDFI"
+Issues = "https://github.com/jinhongdu-lab/FDFI/issues"
 
 [tool.setuptools]
 packages = ["fdfi"]

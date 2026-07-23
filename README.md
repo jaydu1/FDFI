@@ -11,7 +11,7 @@ Current release: `0.0.9`
 
 ## Overview
 
-FDFI (Flow-Disentangled Feature Importance) is a Python module that provides interpretable machine learning explanations through disentangled feature importance methods. This package implements both DFI (Disentangled Feature Importance) and FDFI (Flow-DFI) methods. Similar to SHAP, FDFI helps you understand which features are driving your model's predictions.
+FDFI (Flow-Disentangled Feature Importance) is a Python module that provides interpretable machine learning explanations through disentangled feature importance methods. This package implements both OT-based DFI and flow-based FDFI methods.
 
 ## Features
 
@@ -28,7 +28,7 @@ FDFI (Flow-Disentangled Feature Importance) is a Python module that provides int
 ### From Source
 
 ```bash
-git clone https://github.com/jaydu1/FDFI.git
+git clone https://github.com/jinhongdu-lab/FDFI.git
 cd FDFI
 pip install -e .
 ```
@@ -272,7 +272,7 @@ If you use DFI in your research, please cite:
   title={DFI: Python Library for Disentangled Feature Importance},
   author={DFI Team},
   year={2026},
-  url={https://github.com/jaydu1/FDFI}
+  url={https://github.com/jinhongdu-lab/FDFI}
 }
 
 @article{du2025disentangled,
@@ -292,4 +292,4 @@ If you use DFI in your research, please cite:
 
 ## Contact
 
-For questions and issues, please use the [GitHub issue tracker](https://github.com/jaydu1/FDFI/issues).
+For questions and issues, please use the [GitHub issue tracker](https://github.com/jinhongdu-lab/FDFI/issues).
